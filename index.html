@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Spine Angles" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <title>Spine Angles</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="top">
+        <button id="btn-open" class="primary">Photo</button>
+        <span class="spacer"></span>
+        <button id="btn-undo" disabled>Undo</button>
+        <button id="btn-adjust" disabled>Adjust</button>
+        <button id="btn-clear" disabled>Clear</button>
+        <button id="btn-share" disabled>Share</button>
+      </header>
+
+      <main id="stage">
+        <canvas id="cv-image"></canvas>
+        <canvas id="cv-overlay"></canvas>
+        <div id="loupe" hidden>
+          <canvas id="loupe-image"></canvas>
+          <canvas id="loupe-overlay"></canvas>
+        </div>
+
+        <section id="empty">
+          <img src="icon.svg" alt="" width="72" height="72" />
+          <h1>Spine Angles</h1>
+          <p>Quick angle measurements on a photo of a radiograph.</p>
+          <button id="btn-open-big" class="primary big">Take or choose a photo</button>
+          <ul>
+            <li>Shoot square-on to the screen, or use a screenshot. A tilted photo skews angles.</li>
+            <li>Your photo stays on this device. Nothing is uploaded.</li>
+            <li>Approximate measurements for convenience, not for diagnostic use.</li>
+          </ul>
+        </section>
+
+        <div id="hint" hidden>
+          <span id="hint-text"></span>
+          <span id="hint-actions"></span>
+        </div>
+        <div id="toast" hidden></div>
+      </main>
+
+      <section id="sheet" hidden>
+        <div id="sheet-adjust" hidden>
+          <label class="slider"><span>Brightness</span><input id="in-brightness" type="range" min="0.4" max="2.5" step="0.01" value="1" /></label>
+          <label class="slider"><span>Contrast</span><input id="in-contrast" type="range" min="0.4" max="3" step="0.01" value="1" /></label>
+          <label class="slider"><span>Level <b id="out-tilt">0.0°</b></span><input id="in-tilt" type="range" min="-20" max="20" step="0.1" value="0" /></label>
+          <p class="fine">Level the photo so the patient's true vertical is upright. PT, SS, T1 slope and Slope readings depend on it.</p>
+          <div class="row">
+            <button id="btn-invert">Invert</button>
+            <button id="btn-rotate">Rotate 90°</button>
+            <button id="btn-flip">Flip</button>
+            <button id="btn-fit">Fit</button>
+            <button id="btn-reset">Reset</button>
+          </div>
+        </div>
+
+        <div id="sheet-guided" hidden>
+          <h2>Guided sagittal measurements</h2>
+          <div id="regions"></div>
+          <p class="fine">You will be prompted for each landmark from the pelvis upwards. On each endplate tap the anterior corner first. Skip anything you cannot see.</p>
+          <div class="row">
+            <button id="btn-guided-start" class="primary">Start</button>
+            <button id="btn-guided-clear">Clear landmarks</button>
+          </div>
+        </div>
+
+        <div id="sheet-results" hidden>
+          <div id="results-body"></div>
+          <div class="row wrap">
+            <button id="btn-facing"></button>
+            <label class="age">Age <input id="in-age" type="number" inputmode="numeric" min="18" max="110" placeholder="–" /></label>
+            <button id="btn-copy">Copy results</button>
+          </div>
+          <p class="fine">Measured on a photograph, so values are approximate. Reference ranges are guides only.</p>
+        </div>
+      </section>
+
+      <nav id="tools">
+        <button data-tool="cobb">
+          <svg viewBox="0 0 24 24"><path d="M4 6l16 3M4 18l16-3" /></svg>Cobb
+        </button>
+        <button data-tool="angle3">
+          <svg viewBox="0 0 24 24"><path d="M19 5L5 19h15" /><path d="M10.5 13.5a7 7 0 0 1 2 5.5" /></svg>Angle
+        </button>
+        <button data-tool="slope">
+          <svg viewBox="0 0 24 24"><path d="M4 16L20 9" /><path d="M4 16h16" stroke-dasharray="2 3" /></svg>Slope
+        </button>
+        <button data-tool="guided">
+          <svg viewBox="0 0 24 24"><path d="M9 4h6M8.5 9h7M8.5 14h7M10 19h5" /><circle cx="17" cy="20" r="1.6" /></svg>Guided
+        </button>
+        <button id="btn-results">
+          <svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9" /></svg>Results
+        </button>
+      </nav>
+    </div>
+    <input type="file" id="file" accept="image/*" hidden />
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
