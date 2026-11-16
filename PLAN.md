@@ -65,10 +65,11 @@ Step-by-step prompts ("tap the anterior S1 endplate"), skippable so partial sets
 
 - **Stack:** Vite + TypeScript, single-page app, HTML canvas for rendering. No backend, no accounts, no analytics.
 - **Structure:**
-  - `src/geometry/` — pure functions for angles and spinopelvic parameters, unit tested
-  - `src/viewer/` — canvas, pan/zoom, loupe, pointer handling
-  - `src/tools/` — free measurement tools and the guided workflow
-  - `src/ui/` — toolbar, results sheet, export
+  - `src/geometry.ts` — pure functions for angles, unit tested
+  - `src/sagittal.ts` — guided landmarks and spinopelvic parameter calculations
+  - `src/model.ts`, `src/draw.ts` — measurement model and overlay drawing (screen, loupe, export)
+  - `src/image.ts`, `src/export.ts` — photo loading/transforms and share/export
+  - `src/main.ts` — viewer, touch handling and UI
 - **Tests:** Vitest on the geometry module with known-answer cases, including checks that PI = PT + SS and that results survive image flip and rotation.
 - **Hosting:** static files on GitHub Pages or Cloudflare Pages (both free, HTTPS). During development, the Vite dev server is reachable from the phone on the same Wi-Fi.
 
