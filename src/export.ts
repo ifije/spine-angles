@@ -14,13 +14,15 @@ export interface ExportInput {
   W: number
   H: number
   sagittal: SagittalResults
+  /** Result isolated on screen, if any; the exported image matches. */
+  focus?: string | null
 }
 
 const CAPTION = 'Measured on a photograph. Approximate; not for diagnostic use.'
 
 /** Render exactly what is on screen (so anything panned out of view is left out), plus a results footer. */
 export function renderExport(input: ExportInput): HTMLCanvasElement {
-  const { src, doc, tone, M, W, H, sagittal } = input
+  const { src, doc, tone, M, W, H, sagittal, focus } = input
   const k = Math.max(2, Math.min(3, 2000 / Math.max(W, H)))
   const w = Math.round(W * k)
   const h = Math.round(H * k)
@@ -71,7 +73,7 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
   ctx.beginPath()
   ctx.rect(0, 0, w, h)
   ctx.clip()
-  drawOverlay(ctx, Mk, doc, { k, selected: null })
+  drawOverlay(ctx, Mk, doc, { k, selected: null, sag: sagittal, focus })
   ctx.restore()
 
   ctx.fillStyle = '#0b0d10'

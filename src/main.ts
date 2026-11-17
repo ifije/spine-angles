@@ -36,6 +36,8 @@ let tool: Tool = null
 /** Free measurement currently being placed. */
 let activeId: number | null = null
 let selected: number | null = null
+/** Guided result shown on its own on the image (its key), or null to show them all. */
+let focus: string | null = null
 let steps: FeatureId[] = []
 /** Name of the measurement being guided, shown in the prompt. */
 let guidedTitle = ''
@@ -83,7 +85,7 @@ function draw() {
   ictx.setTransform(M[0] * dpr, M[1] * dpr, M[2] * dpr, M[3] * dpr, M[4] * dpr, M[5] * dpr)
   ictx.imageSmoothingQuality = 'high'
   ictx.drawImage(src, 0, 0)
-  drawOverlay(octx, M, doc, { k: 1, selected })
+  drawOverlay(octx, M, doc, { k: 1, selected, sag: sagittal(), focus })
   if (loupeAt) drawLoupe()
 }
 
@@ -102,7 +104,7 @@ function drawLoupe() {
   const lo = cvLoupeOverlay.getContext('2d')!
   lo.setTransform(dpr, 0, 0, dpr, 0, 0)
   lo.clearRect(0, 0, LOUPE, LOUPE)
-  drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true })
+  drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
   // Crosshair ticks, leaving the centre clear.
   for (const [color, width] of [['rgba(0,0,0,0.7)', 3], ['#fff', 1]] as const) {
     lo.strokeStyle = color
@@ -559,6 +561,15 @@ function updateHint() {
       text = `${measureName(m)}: ${measureText(m, doc.tilt) ?? ''}`
       actions.append(button('Delete', () => deleteMeasure(id), 'danger'))
     }
+  } else if (src && focus) {
+    const r = sagittal().results.find((x) => x.key === focus)
+    if (r) {
+      text = `Showing only ${r.label}: ${formatValue(r)}`
+      actions.append(button('Show all', () => {
+        focus = null
+        refresh()
+      }))
+    }
   }
   $('hint-text').textContent = text
   hint.hidden = !text
@@ -586,7 +597,12 @@ function renderResults() {
     body.append(el('div', 'empty-note', 'None yet. Use Guided to place landmarks.'))
   }
   for (const r of shown) {
-    const row = el('div', 'res')
+    const row = el('div', 'res tap' + (r.key === focus ? ' sel' : ''))
+    row.addEventListener('click', () => {
+      focus = focus === r.key ? null : r.key
+      selected = null
+      refresh()
+    })
     const name = el('div', 'name', `${r.label}`)
     if (r.note) name.append(el('small', '', r.note))
     row.append(name, el('div', 'val', formatValue(r)), el('span', ''))
@@ -636,6 +652,8 @@ function toggleSheet(id: SheetId) {
 }
 
 function refresh() {
+  // An isolated result that no longer exists (landmark cleared or undone) stops being isolated.
+  if (focus && !sagittal().results.some((r) => r.key === focus)) focus = null
   updateHint()
   const has = !!src
   $<HTMLButtonElement>('btn-undo').disabled = !undoStack.length
@@ -902,7 +920,7 @@ $('btn-copy').addEventListener('click', async () => {
 $('btn-share').addEventListener('click', async () => {
   if (!src) return
   try {
-    const outcome = await exportView({ src, doc, tone, M: viewMat(), W, H, sagittal: sagittal() })
+    const outcome = await exportView({ src, doc, tone, M: viewMat(), W, H, sagittal: sagittal(), focus })
     if (outcome === 'downloaded') toast('Image saved')
   } catch {
     toast('Could not export the image')
