@@ -700,6 +700,64 @@ stage.addEventListener('drop', (e) => {
 
 // ---------------------------------------------------------------- wiring
 
+// Swipe a bottom panel down to dismiss it (or tap its handle).
+{
+  const sheetEl = $('sheet')
+  let startY = 0
+  let startT = 0
+  let dy = 0
+  let tracking = false
+  let dragging = false
+
+  const closeSheet = () => {
+    sheetEl.style.transition = 'transform 0.16s ease-in'
+    sheetEl.style.transform = 'translateY(100%)'
+    window.setTimeout(() => {
+      sheetEl.style.transition = ''
+      sheetEl.style.transform = ''
+      openSheet(null)
+      refresh()
+    }, 160)
+  }
+
+  $('sheet-grab').addEventListener('click', closeSheet)
+
+  sheetEl.addEventListener('touchstart', (e) => {
+    const t = e.target as HTMLElement
+    // Sliders and text fields keep their own gestures; a scrolled list scrolls first.
+    tracking = e.touches.length === 1 && !t.closest('input') && (sheetEl.scrollTop <= 0 || !!t.closest('#sheet-grab'))
+    dragging = false
+    dy = 0
+    startY = e.touches[0].clientY
+    startT = performance.now()
+  }, { passive: true })
+
+  sheetEl.addEventListener('touchmove', (e) => {
+    if (!tracking) return
+    dy = e.touches[0].clientY - startY
+    if (!dragging) {
+      if (dy < -6) tracking = false // moving up: let the list scroll
+      if (dy < 8) return
+      dragging = true
+      sheetEl.style.transition = ''
+    }
+    e.preventDefault()
+    sheetEl.style.transform = `translateY(${Math.max(0, dy)}px)`
+  }, { passive: false })
+
+  const end = () => {
+    if (!dragging) return
+    dragging = false
+    tracking = false
+    const fast = dy > 24 && dy / (performance.now() - startT) > 0.5
+    if (dy > 70 || fast) return closeSheet()
+    sheetEl.style.transition = 'transform 0.16s ease-out'
+    sheetEl.style.transform = ''
+  }
+  sheetEl.addEventListener('touchend', end)
+  sheetEl.addEventListener('touchcancel', end)
+}
+
 $('btn-undo').addEventListener('click', undo)
 $('btn-clear').addEventListener('click', clearAll)
 $('btn-adjust').addEventListener('click', () => toggleSheet('adjust'))

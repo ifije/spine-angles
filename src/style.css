@@ -230,3 +230,9 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
   #top { gap: 4px; }
   #top button { padding: 0 7px; font-size: 14px; }
 }
+
+/* Swipe-down handle on the bottom panels */
+#sheet { will-change: transform; }
+#sheet-grab { display: flex; justify-content: center; align-items: center; height: 26px; margin: -12px 0 2px; cursor: pointer; }
+#sheet-grab span { width: 40px; height: 5px; border-radius: 3px; background: #4a525e; }
+#tools { position: relative; z-index: 2; }
