@@ -695,6 +695,10 @@ async function openPhoto(file: Blob) {
   activeId = null
   selected = null
   facingOverride = 0
+  // Age belongs to the previous patient; leaving it would apply their age targets to this one.
+  age = undefined
+  $<HTMLInputElement>('in-age').value = ''
+  steps = []
   skipped.clear()
   openSheet(null)
   syncAdjustInputs()
