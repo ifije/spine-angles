@@ -1,28 +1,68 @@
 # Spine Angles
 
-A phone-first web app for quick angular spine measurements on ordinary photos of radiographs.
-Take a picture of the screen, tap a few landmarks, read the angles.
+Quick angle measurements on a phone photo of a spine radiograph. Take a picture of the screen, tap a few landmarks, read the angles. No DICOM files, no account, nothing to install from an app store.
 
-- **Free tools:** Cobb angle, three-point angle, slope to horizontal or vertical.
-- **Guided sagittal workflow:** PI, PT, SS, LL, L4–S1, PI−LL, TK, T1 slope, C2–C7 lordosis,
-  T1S−CL, T1 pelvic angle, L1 pelvic angle and global tilt, with Schwab modifiers and
-  age-adjusted targets.
-- **Guided coronal workflow:** Cobb angle per curve (proximal thoracic, main thoracic,
-  thoracolumbar/lumbar, lumbosacral fractional), pelvic obliquity and T1 tilt.
-- **Private:** everything runs in the browser. Photos are never uploaded or stored.
-- **Installable:** add it to the iPhone home screen from Safari's share menu; it then works offline.
+**Open it here: https://ifije.github.io/spine-angles/**
 
-Angles only. A photo has no reliable scale, so distances such as SVA are not offered.
-Measurements are approximate and not for diagnostic use.
+> Measurements made on a photograph are approximate. This is a convenience tool, not a medical device, and is not for diagnostic use.
 
-## Using it well
+## Put it on your iPhone
 
-- Shoot square-on to the monitor, or use a screenshot. An off-axis photo skews angles.
-- Use **Adjust → Level** if the film is tilted in the photo. PT, SS and T1 slope depend on true vertical.
-- Drag any point to refine it; a magnifier appears while you drag. Pinch to zoom, drag to pan.
-- **Share** exports exactly what is on screen, so pan or zoom to leave patient identifiers out of frame.
+1. Open the link above in **Safari**.
+2. Tap the Share button, then **Add to Home Screen**.
+3. Open it from the home screen. It runs full-screen and keeps working with no signal.
 
-## Development
+It also works in any modern browser on Android, tablets and desktop.
+
+## Privacy
+
+Everything happens on your device. Photos are not uploaded, and nothing is saved after you close the app. Sharing an image is the only way anything leaves the phone, and you choose where it goes.
+
+## Taking a good photo
+
+- Shoot **square-on** to the monitor, or use a screenshot. A photo taken at an angle skews the measurements.
+- If the film sits tilted in the photo, use **Adjust → Level** to straighten it. Measurements against vertical or horizontal (PT, SS, T1 slope, pelvic obliquity, T1 tilt) depend on this; angles between two lines (Cobb, lordosis, kyphosis) do not.
+- Lengths such as SVA are not offered, because a photo has no reliable scale.
+
+## Measuring
+
+### Basic tools (bottom bar)
+
+| Tool | Taps | Gives |
+|---|---|---|
+| **Cobb** | Both ends of one endplate, then both ends of the other | Angle between the two lines |
+| **Angle** | Arm, vertex, arm | Angle at the vertex |
+| **Slope** | Two ends of a line | Angle to horizontal or vertical, whichever is nearer |
+
+### Guided measurements
+
+Tap **Guided**, choose **Sagittal** or **Coronal**, then tap the measurement you want. The app asks only for the landmarks that measurement needs, and reuses any you have already placed.
+
+- **Sagittal:** PI, PT, SS, LL, L4–S1, PI−LL, thoracic kyphosis (T4–T12), L1 pelvic angle, T1 pelvic angle, global tilt, T1 slope, C2–C7 lordosis, T1S−CL.
+- **Coronal:** Cobb for the proximal thoracic, main thoracic, thoracolumbar/lumbar and lumbosacral fractional curves; pelvic obliquity; T1 tilt.
+
+On sagittal endplates, tap the **anterior corner first**; that tells the app which way the patient faces. If it guesses wrong, use the **Facing** button in Results. On coronal films the order does not matter, and sides are reported as "higher on image left/right".
+
+Each guided result is drawn on the image where it is measured. Tap a result in **Results** to show only that one.
+
+### Adjusting and correcting
+
+- **Drag** any point to refine it. A magnifier appears while you drag.
+- **Pinch** to zoom, **drag** the image to pan, **double-tap** empty space to fit.
+- **Undo** steps back one action at a time.
+- **Clear** (top bar) removes everything. In Results, each section has its own Clear. To remove one landmark, tap it on the image and choose Delete.
+- Swipe a bottom panel down to close it.
+
+### Getting results out
+
+- **Share** saves or sends exactly what is on screen, with the values printed underneath. Pan or zoom first to keep a patient name out of frame.
+- **Copy results** (in Results) puts the values on the clipboard as a table for Mail, Notes or Word, with plain text for everything else.
+
+## Reference values
+
+Results show Schwab modifiers, age-adjusted targets (enter the age in Results) and similar guides beside some values. These are aids, not recommendations; check them against your own sources before relying on them.
+
+## For developers
 
 ```
 npm install
@@ -32,9 +72,8 @@ npm run build    # type-check and build to dist/
 npm run clean    # remove build output and caches
 ```
 
-Pushing to `main` runs the tests and deploys to GitHub Pages.
-`python3 scripts/make_icons.py` regenerates the app icons.
+Vite and TypeScript, no backend. Pushing to `main` runs the tests and deploys to GitHub Pages. `python3 scripts/make_icons.py` regenerates the app icons. Design notes are in [PLAN.md](PLAN.md); open work is in [TODO.md](TODO.md).
 
-See [PLAN.md](PLAN.md) for design notes and [TODO.md](TODO.md) for what is left.
+## Acknowledgement
 
-Inspired by [SpineForgePlanner](https://github.com/AkbulutBB/SpineForgePlanner); written independently and shares no code with it.
+Inspired by [SpineForgePlanner](https://github.com/AkbulutBB/SpineForgePlanner) by Dr. Bahadır Akbulut. This project was written independently and shares no code with it.
