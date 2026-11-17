@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Wolfray Applied Technologies, LLC
+
 // Loading and transforming the photo. The working copy is an offscreen canvas.
 
 /** Longest edge of the working copy. Keeps well inside Safari's canvas area limit. */

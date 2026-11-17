@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Wolfray Applied Technologies, LLC
+
 // Draws measurements and landmarks. Used for the screen, the loupe and the exported image.
 
 import { Pt, mid, dist } from './geometry'

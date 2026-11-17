@@ -74,6 +74,18 @@ npm run clean    # remove build output and caches
 
 Vite and TypeScript, no backend. Pushing to `main` runs the tests and deploys to GitHub Pages. `python3 scripts/make_icons.py` regenerates the app icons. Design notes are in [PLAN.md](PLAN.md); open work is in [TODO.md](TODO.md).
 
+## Licence
+
+Copyright (C) 2026 Wolfray Applied Technologies, LLC.
+
+Spine Angles is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3, as published by the Free Software Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE) for the full terms.
+
+The "Spine Angles" name and icon are not covered by that licence.
+
+## Contributing
+
+Bug reports and suggestions are welcome as issues. Code contributions are not accepted without a contributor agreement in place first; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Acknowledgement
 
 Inspired by [SpineForgePlanner](https://github.com/AkbulutBB/SpineForgePlanner) by Dr. Bahadır Akbulut. This project was written independently and shares no code with it.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Wolfray Applied Technologies, LLC
+
 import { describe, it, expect } from 'vitest'
 import { Pt, DEG, acuteAngle, cobbAngle, angle3, slopeInfo, rot, norm180 } from '../src/geometry'
 import { compute, Features, detectFacing, stepsFor, MEASURE_GROUPS } from '../src/sagittal'

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Wolfray Applied Technologies, LLC
+
 // Guided sagittal workflow: landmark definitions and parameter calculations.
 
 import { Pt, mid, norm180, endplateSlope, tiltFromVertical, pelvicIncidence, rot, cobbAngle, slopeInfo } from './geometry'

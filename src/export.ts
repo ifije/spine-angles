@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Wolfray Applied Technologies, LLC
+
 // Export of the current view as a shareable JPEG, and results as plain text.
 
 import { Doc, Mat, Measure, isDone, measureText } from './model'

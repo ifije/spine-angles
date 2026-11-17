@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Wolfray Applied Technologies, LLC
+
 // Document model shared by the UI, drawing and export code.
 
 import { Pt, rot, cobbAngle, angle3, slopeInfo } from './geometry'
