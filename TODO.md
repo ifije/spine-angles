@@ -29,6 +29,13 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] Schwab modifiers, age-adjusted targets, Roussouly grouping by SS
 - [x] Multi-curve coronal Cobb (add as many Cobb measurements as needed)
 
+## Coronal (added after first release)
+- [x] Sagittal / Coronal switch in the Guided and Results panels
+- [x] Cobb per curve: proximal thoracic, main thoracic, TL/lumbar, fractional
+- [x] Pelvic obliquity, T1 tilt (against horizontal, with the high side)
+- [ ] Other coronal angles if wanted: clavicle angle, L4/L5 tilt, end-vertebra tilt, sacral obliquity
+- [ ] Coronal balance (needs calibration, or an angle-based stand-in)
+
 ## Phase 3 — Install and deploy
 - [x] Manifest, icons, service worker with versioned cache
 - [x] Deploy to GitHub Pages (auto-deploys on push to `main`)

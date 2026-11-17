@@ -52,6 +52,11 @@
 
       <section id="sheet" hidden>
         <div id="sheet-grab" role="button" aria-label="Close panel"><span></span></div>
+        <div id="plane-tabs" role="tablist" hidden>
+          <button data-plane="sagittal" role="tab">Sagittal</button>
+          <button data-plane="coronal" role="tab">Coronal</button>
+        </div>
+
         <div id="sheet-adjust" hidden>
           <label class="slider"><span>Brightness</span><input id="in-brightness" type="range" min="0.4" max="2.5" step="0.01" value="1" /></label>
           <label class="slider"><span>Contrast</span><input id="in-contrast" type="range" min="0.4" max="3" step="0.01" value="1" /></label>
@@ -69,7 +74,7 @@
         <div id="sheet-guided" hidden>
           <h2>Tap a measurement to be guided through it</h2>
           <div id="guided-body"></div>
-          <p class="fine">You are only asked for landmarks that measurement needs and that are not placed yet. On each endplate tap the anterior corner first.</p>
+          <p class="fine" id="guided-note"></p>
           <div class="row">
             <button id="btn-guided-clear">Clear landmarks</button>
           </div>
@@ -79,7 +84,7 @@
           <div id="results-body"></div>
           <div class="row wrap">
             <button id="btn-facing"></button>
-            <label class="age">Age <input id="in-age" type="number" inputmode="numeric" min="18" max="110" placeholder="–" /></label>
+            <label class="age" id="age-wrap">Age <input id="in-age" type="number" inputmode="numeric" min="18" max="110" placeholder="–" /></label>
             <button id="btn-copy">Copy results</button>
           </div>
           <p class="fine">Measured on a photograph, so values are approximate. Reference ranges are guides only.</p>

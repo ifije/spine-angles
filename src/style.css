@@ -243,3 +243,8 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 .chip small { margin-left: 8px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .chip.done { border-color: #4a6b52; }
 .chip.done small { color: #7ee787; }
+
+/* Sagittal / coronal switch at the top of the Guided and Results panels */
+#plane-tabs { display: flex; gap: 0; margin: 0 0 12px; padding: 3px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; }
+#plane-tabs button { flex: 1; min-height: 34px; background: transparent; border-color: transparent; color: var(--muted); font-weight: 600; }
+#plane-tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }

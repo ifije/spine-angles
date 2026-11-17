@@ -7,6 +7,8 @@ Take a picture of the screen, tap a few landmarks, read the angles.
 - **Guided sagittal workflow:** PI, PT, SS, LL, L4–S1, PI−LL, TK, T1 slope, C2–C7 lordosis,
   T1S−CL, T1 pelvic angle, L1 pelvic angle and global tilt, with Schwab modifiers and
   age-adjusted targets.
+- **Guided coronal workflow:** Cobb angle per curve (proximal thoracic, main thoracic,
+  thoracolumbar/lumbar, lumbosacral fractional), pelvic obliquity and T1 tilt.
 - **Private:** everything runs in the browser. Photos are never uploaded or stored.
 - **Installable:** add it to the iPhone home screen from Safari's share menu; it then works offline.
 

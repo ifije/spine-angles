@@ -5,7 +5,7 @@ import { drawOverlay, colorFor } from './draw'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults } from './export'
 import {
-  FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef,
+  FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef, Plane,
   stepsFor, isComplete, compute, formatValue,
 } from './sagittal'
 
@@ -39,6 +39,13 @@ let selected: number | null = null
 let steps: FeatureId[] = []
 /** Name of the measurement being guided, shown in the prompt. */
 let guidedTitle = ''
+/** Which set of guided measurements the Guided and Results panels show. */
+let plane: Plane = 'sagittal'
+try {
+  if (localStorage.getItem('plane') === 'coronal') plane = 'coronal'
+} catch {
+  /* storage unavailable: start on sagittal */
+}
 const skipped = new Set<FeatureId>()
 let facingOverride = 0
 let age: number | undefined
@@ -573,17 +580,21 @@ function renderResults() {
     }
   }
   const sag = sagittal()
-  body.append(el('h3', '', 'Sagittal parameters'))
-  if (!sag.results.length) {
+  const shown = sag.results.filter((r) => r.plane === plane)
+  body.append(el('h3', '', plane === 'sagittal' ? 'Sagittal parameters' : 'Coronal parameters'))
+  if (!shown.length) {
     body.append(el('div', 'empty-note', 'None yet. Use Guided to place landmarks.'))
   }
-  for (const r of sag.results) {
+  for (const r of shown) {
     const row = el('div', 'res')
     const name = el('div', 'name', `${r.label}`)
     if (r.note) name.append(el('small', '', r.note))
     row.append(name, el('div', 'val', formatValue(r)), el('span', ''))
     body.append(row)
   }
+  // Facing and age only apply to the sagittal parameters.
+  $('btn-facing').hidden = plane !== 'sagittal'
+  $('age-wrap').hidden = plane !== 'sagittal'
   $('btn-facing').textContent = `Facing ${sag.facing > 0 ? 'right' : 'left'}${facingOverride ? '' : ' (auto)'}`
 }
 
@@ -591,7 +602,7 @@ function renderGuided() {
   const body = $('guided-body')
   body.replaceChildren()
   const values = new Map(sagittal().results.map((r) => [r.key, formatValue(r)]))
-  for (const group of MEASURE_GROUPS) {
+  for (const group of MEASURE_GROUPS.filter((g) => g.plane === plane)) {
     body.append(el('h3', '', group.title))
     const chips = el('div', 'chips')
     for (const item of group.items) {
@@ -605,12 +616,17 @@ function renderGuided() {
     }
     body.append(chips)
   }
+  $('guided-note').textContent =
+    plane === 'sagittal'
+      ? 'You are only asked for landmarks that measurement needs and that are not placed yet. On each endplate tap the anterior corner first.'
+      : 'Tap the two ends of each line in either order. Level the photo first (Adjust): pelvic obliquity and T1 tilt are measured against horizontal.'
 }
 
 function openSheet(id: SheetId | null) {
   sheet = id
   $('sheet').hidden = !id
   for (const s of ['adjust', 'guided', 'results'] as const) $(`sheet-${s}`).hidden = s !== id
+  $('plane-tabs').hidden = id !== 'guided' && id !== 'results'
 }
 
 function toggleSheet(id: SheetId) {
@@ -630,6 +646,7 @@ function refresh() {
     b.classList.toggle('on', t === tool || (t === 'guided' && sheet === 'guided'))
   })
   $('btn-results').classList.toggle('on', sheet === 'results')
+  document.querySelectorAll<HTMLElement>('#plane-tabs [data-plane]').forEach((b) => b.classList.toggle('on', b.dataset.plane === plane))
   $('empty').hidden = has
   if (sheet === 'results') renderResults()
   if (sheet === 'guided') renderGuided()
@@ -796,6 +813,18 @@ document.querySelectorAll<HTMLElement>('#tools [data-tool]').forEach((b) => {
     } else {
       toggleSheet('guided')
     }
+  })
+})
+
+document.querySelectorAll<HTMLElement>('#plane-tabs [data-plane]').forEach((b) => {
+  b.addEventListener('click', () => {
+    plane = b.dataset.plane as Plane
+    try {
+      localStorage.setItem('plane', plane)
+    } catch {
+      /* not remembered */
+    }
+    refresh()
   })
 })
 

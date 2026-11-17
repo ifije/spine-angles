@@ -156,10 +156,62 @@ describe('sagittal parameters', () => {
   it('orders guided steps caudal to cranial without duplicates', () => {
     expect(stepsFor(['t1c', 's1', 'fh2', 'fh1', 's1'])).toEqual(['fh1', 'fh2', 's1', 't1c'])
     // Every guided measurement only asks for landmarks that exist, and its key is a real result.
-    const keys = new Set(compute(model().f).results.map((r) => r.key))
+    const keys = new Set(compute({ ...model().f, ...coronalModel() }).results.map((r) => r.key))
     for (const g of MEASURE_GROUPS) for (const m of g.items) {
       expect(stepsFor(m.needs).length, m.key).toBe(new Set(m.needs).size)
       if (!m.key.startsWith('SET-')) expect(keys.has(m.key), m.key).toBe(true)
     }
+  })
+})
+
+/** Coronal landmarks with known angles. Positive seg angle = image-right end lower. */
+function coronalModel(): Features {
+  return {
+    po: seg({ x: 500, y: 1500 }, 4, 150),
+    ct1: seg({ x: 500, y: 200 }, -6, 30),
+    ptU: seg({ x: 500, y: 210 }, -8), ptL: seg({ x: 510, y: 400 }, 14),
+    mtU: seg({ x: 510, y: 410 }, 20), mtL: seg({ x: 480, y: 800 }, -32),
+    tlU: seg({ x: 480, y: 810 }, -28), tlL: seg({ x: 500, y: 1200 }, 15),
+    frU: seg({ x: 500, y: 1250 }, 12), frL: seg({ x: 500, y: 1400 }, -3),
+  }
+}
+
+describe('coronal parameters', () => {
+  const get = (f: Features, opts = {}) => Object.fromEntries(compute(f, opts).results.map((r) => [r.key, r]))
+
+  it('matches the synthetic model', () => {
+    const r = get(coronalModel())
+    expect(r['Prox T Cobb'].value).toBeCloseTo(22, 6)
+    expect(r['Main T Cobb'].value).toBeCloseTo(52, 6)
+    expect(r['TL/L Cobb'].value).toBeCloseTo(43, 6)
+    expect(r['Fractional'].value).toBeCloseTo(15, 6)
+    expect(r['PO'].value).toBeCloseTo(4, 6)
+    expect(r['PO'].note).toBe('higher on image left')
+    expect(r['T1 tilt'].value).toBeCloseTo(6, 6)
+    expect(r['T1 tilt'].note).toBe('higher on image right')
+    for (const x of Object.values(r)) expect(x.plane).toBe('coronal')
+  })
+
+  it('does not depend on tap order', () => {
+    const f = coronalModel()
+    for (const k of ['po', 'mtU', 'frL'] as const) f[k] = [...f[k]!].reverse()
+    const r = get(f)
+    expect(r['Main T Cobb'].value).toBeCloseTo(52, 6)
+    expect(r['PO'].note).toBe('higher on image left')
+  })
+
+  it('levelling corrects tilt against horizontal but leaves Cobb angles alone', () => {
+    const tilted = mapPts(coronalModel(), (p) => rot(p, 5))
+    expect(get(tilted)['PO'].value).toBeCloseTo(9, 6)
+    const r = get(tilted, { tilt: -5 })
+    expect(r['PO'].value).toBeCloseTo(4, 6)
+    expect(get(tilted)['Main T Cobb'].value).toBeCloseTo(52, 6)
+  })
+
+  it('coronal landmarks do not affect which way the sagittal view faces', () => {
+    const { f } = model()
+    expect(compute({ ...f, ...coronalModel() }).facing).toBe(compute(f).facing)
+    const sagittalKeys = compute(f).results.map((r) => r.key)
+    expect(compute({ ...f, ...coronalModel() }).results.filter((r) => r.plane === 'sagittal').map((r) => r.key)).toEqual(sagittalKeys)
   })
 })

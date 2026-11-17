@@ -145,7 +145,10 @@ export function resultsClipboard(doc: Doc, sagittal: SagittalResults, nameOf: (m
     rows.push({ name: nameOf(m), short: nameOf(m), value: measureText(m, doc.tilt) ?? '', note: '' })
   }
   for (const r of sagittal.results) {
-    rows.push({ name: `${r.label} (${r.key})`, short: r.key, value: formatValue(r), note: r.note ?? '' })
+    const name = r.plane === 'sagittal' ? `${r.label} (${r.key})` : r.label
+    // Which side is high is part of a coronal reading, so it goes in the plain text too.
+    const side = r.plane === 'coronal' && r.note ? ` (${r.note})` : ''
+    rows.push({ name, short: r.key, value: formatValue(r) + side, note: r.plane === 'coronal' ? '' : r.note ?? '' })
   }
   if (!rows.length) return null
   const plain = [HEADER, ...rows.map((r) => `${r.short}  ${r.value}`)].join('\n')
