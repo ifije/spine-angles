@@ -36,6 +36,8 @@ let tool: Tool = null
 /** Free measurement currently being placed. */
 let activeId: number | null = null
 let selected: number | null = null
+/** Guided landmark tapped on the image, so it can be deleted on its own. */
+let selectedFeature: FeatureId | null = null
 /** Guided result shown on its own on the image (its key), or null to show them all. */
 let focus: string | null = null
 let steps: FeatureId[] = []
@@ -85,7 +87,7 @@ function draw() {
   ictx.setTransform(M[0] * dpr, M[1] * dpr, M[2] * dpr, M[3] * dpr, M[4] * dpr, M[5] * dpr)
   ictx.imageSmoothingQuality = 'high'
   ictx.drawImage(src, 0, 0)
-  drawOverlay(octx, M, doc, { k: 1, selected, sag: sagittal(), focus })
+  drawOverlay(octx, M, doc, { k: 1, selected, selectedFeature, sag: sagittal(), focus })
   if (loupeAt) drawLoupe()
 }
 
@@ -287,8 +289,10 @@ function onTap(screen: Pt) {
   const inside = p.x >= 0 && p.y >= 0 && p.x <= src.width && p.y <= src.height
   const now = performance.now()
   if (!tool) {
-    if (selected !== null) selected = null
-    else if (now - lastTap < 320) fit()
+    if (selected !== null || selectedFeature) {
+      selected = null
+      selectedFeature = null
+    } else if (now - lastTap < 320) fit()
     lastTap = now
     refresh()
     return
@@ -332,6 +336,31 @@ function deleteMeasure(id: number) {
   refresh()
 }
 
+function deleteFeature(id: FeatureId) {
+  if (!doc.features[id]) return
+  pushUndo()
+  delete doc.features[id]
+  selectedFeature = null
+  refresh()
+}
+
+/** Clear one group: the basic tools' measurements, or one plane's guided landmarks. */
+function clearGroup(group: 'basic' | Plane) {
+  pushUndo()
+  if (group === 'basic') {
+    doc.measures = []
+    selected = null
+    activeId = null
+    if (tool && tool !== 'guided') tool = null
+  } else {
+    for (const f of FEATURES) if (f.plane === group) delete doc.features[f.id]
+    selectedFeature = null
+    skipped.clear()
+    if (tool === 'guided') tool = null
+  }
+  refresh()
+}
+
 function clearAll() {
   if (!doc.measures.length && !Object.keys(doc.features).length) return
   pushUndo()
@@ -341,6 +370,7 @@ function clearAll() {
   tool = null
   activeId = null
   selected = null
+  selectedFeature = null
   refresh()
 }
 
@@ -428,7 +458,10 @@ cvOverlay.addEventListener('pointerdown', (e) => {
   if (h) {
     const sp = apply(viewMat(), h.pts[h.i])
     gesture = { type: 'drag', id: e.pointerId, h, start: p, off: { x: sp.x - p.x, y: sp.y - p.y }, before: snapshot(), moved: false }
-    if (h.measureId !== undefined && !tool) selected = h.measureId
+    if (!tool) {
+      selected = h.measureId ?? null
+      selectedFeature = h.feature ?? null
+    }
     showLoupe(h.pts[h.i], p)
     refresh()
   } else {
@@ -561,6 +594,10 @@ function updateHint() {
       text = `${measureName(m)}: ${measureText(m, doc.tilt) ?? ''}`
       actions.append(button('Delete', () => deleteMeasure(id), 'danger'))
     }
+  } else if (src && selectedFeature && doc.features[selectedFeature]) {
+    const id = selectedFeature
+    text = `${FEATURE_BY_ID[id].name} landmark`
+    actions.append(button('Delete', () => deleteFeature(id), 'danger'))
   } else if (src && focus) {
     const r = sagittal().results.find((x) => x.key === focus)
     if (r) {
@@ -575,12 +612,20 @@ function updateHint() {
   hint.hidden = !text
 }
 
+/** Section heading with its own Clear button. */
+function sectionHead(title: string, onClear: (() => void) | null): HTMLElement {
+  const head = el('div', 'sec')
+  head.append(el('h3', '', title))
+  if (onClear) head.append(button('Clear', onClear))
+  return head
+}
+
 function renderResults() {
   const body = $('results-body')
   body.replaceChildren()
   const done = doc.measures.filter(isDone)
   if (done.length) {
-    body.append(el('h3', '', 'Measurements'))
+    body.append(sectionHead('Measurements', () => clearGroup('basic')))
     for (const m of done) {
       const row = el('div', 'res' + (m.id === selected ? ' sel' : ''))
       const name = el('div', 'name', measureName(m))
@@ -592,7 +637,8 @@ function renderResults() {
   }
   const sag = sagittal()
   const shown = sag.results.filter((r) => r.plane === plane)
-  body.append(el('h3', '', plane === 'sagittal' ? 'Sagittal parameters' : 'Coronal parameters'))
+  const hasLandmarks = FEATURES.some((f) => f.plane === plane && doc.features[f.id])
+  body.append(sectionHead(plane === 'sagittal' ? 'Sagittal parameters' : 'Coronal parameters', hasLandmarks ? () => clearGroup(plane) : null))
   if (!shown.length) {
     body.append(el('div', 'empty-note', 'None yet. Use Guided to place landmarks.'))
   }
@@ -654,6 +700,7 @@ function toggleSheet(id: SheetId) {
 function refresh() {
   // An isolated result that no longer exists (landmark cleared or undone) stops being isolated.
   if (focus && !sagittal().results.some((r) => r.key === focus)) focus = null
+  if (selectedFeature && !doc.features[selectedFeature]) selectedFeature = null
   updateHint()
   const has = !!src
   $<HTMLButtonElement>('btn-undo').disabled = !undoStack.length
@@ -712,6 +759,7 @@ async function openPhoto(file: Blob) {
   tool = null
   activeId = null
   selected = null
+  selectedFeature = null
   facingOverride = 0
   // Age belongs to the previous patient; leaving it would apply their age targets to this one.
   age = undefined
@@ -937,6 +985,8 @@ document.addEventListener('keydown', (e) => {
     else armTool(tool)
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected !== null) {
     deleteMeasure(selected)
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedFeature) {
+    deleteFeature(selectedFeature)
   }
 })
 

@@ -251,3 +251,9 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 
 .res.tap { cursor: pointer; }
 .res.tap.sel .val { color: var(--accent); }
+
+/* Results section heading with a Clear button */
+.sec { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 4px; }
+.sec:first-child { margin-top: 0; }
+#sheet .sec h3 { margin: 0; }
+.sec button { min-height: 28px; padding: 0 10px; font-size: 13px; color: var(--muted); }
