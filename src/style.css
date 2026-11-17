@@ -236,3 +236,10 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 #sheet-grab { display: flex; justify-content: center; align-items: center; height: 26px; margin: -12px 0 2px; cursor: pointer; }
 #sheet-grab span { width: 40px; height: 5px; border-radius: 3px; background: #4a525e; }
 #tools { position: relative; z-index: 2; }
+
+/* Guided measurement picker */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { min-height: 42px; padding: 0 14px; font-weight: 600; }
+.chip small { margin-left: 8px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip.done { border-color: #4a6b52; }
+.chip.done small { color: #7ee787; }

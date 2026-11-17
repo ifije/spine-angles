@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Pt, DEG, acuteAngle, cobbAngle, angle3, slopeInfo, rot, norm180 } from '../src/geometry'
-import { compute, Features, detectFacing, stepsFor } from '../src/sagittal'
+import { compute, Features, detectFacing, stepsFor, MEASURE_GROUPS } from '../src/sagittal'
 
 /** Segment of the given half-length centred at c, at `deg` clockwise from +x (y is down). */
 function seg(c: Pt, deg: number, half = 20): [Pt, Pt] {
@@ -154,6 +154,12 @@ describe('sagittal parameters', () => {
   })
 
   it('orders guided steps caudal to cranial without duplicates', () => {
-    expect(stepsFor(['global', 'lumbopelvic'])).toEqual(['fh1', 'fh2', 's1', 'l4', 'l1', 'l1c', 't1c', 'c7c'])
+    expect(stepsFor(['t1c', 's1', 'fh2', 'fh1', 's1'])).toEqual(['fh1', 'fh2', 's1', 't1c'])
+    // Every guided measurement only asks for landmarks that exist, and its key is a real result.
+    const keys = new Set(compute(model().f).results.map((r) => r.key))
+    for (const g of MEASURE_GROUPS) for (const m of g.items) {
+      expect(stepsFor(m.needs).length, m.key).toBe(new Set(m.needs).size)
+      if (!m.key.startsWith('SET-')) expect(keys.has(m.key), m.key).toBe(true)
+    }
   })
 })

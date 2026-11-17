@@ -5,7 +5,7 @@ import { drawOverlay, colorFor } from './draw'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults } from './export'
 import {
-  FEATURES, FEATURE_BY_ID, REGIONS, FeatureId, RegionId,
+  FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef,
   stepsFor, isComplete, compute, formatValue,
 } from './sagittal'
 
@@ -37,6 +37,8 @@ let tool: Tool = null
 let activeId: number | null = null
 let selected: number | null = null
 let steps: FeatureId[] = []
+/** Name of the measurement being guided, shown in the prompt. */
+let guidedTitle = ''
 const skipped = new Set<FeatureId>()
 let facingOverride = 0
 let age: number | undefined
@@ -222,20 +224,18 @@ function armTool(kind: ToolKind) {
   refresh()
 }
 
-function startGuided() {
-  const regions = REGIONS.filter((r) => $<HTMLInputElement>(`region-${r.id}`).checked).map((r) => r.id)
-  if (!regions.length) return toast('Pick at least one region')
-  try {
-    localStorage.setItem('regions', JSON.stringify(regions))
-  } catch {
-    /* storage unavailable: the choice just is not remembered */
-  }
+function startGuided(def: MeasureDef) {
   dropPartials()
-  steps = stepsFor(regions)
+  // A second femoral head that was skipped stays skipped until landmarks are cleared.
+  const keepFh2 = skipped.has('fh2') && isComplete(doc.features, 'fh1')
   skipped.clear()
+  if (keepFh2) skipped.add('fh2')
+  // Only prompt for what this measurement needs and is not placed yet.
+  steps = stepsFor(def.needs).filter((id) => !isComplete(doc.features, id) && !skipped.has(id))
+  guidedTitle = def.label
   selected = null
-  if (!currentStep()) {
-    toast('Those landmarks are already placed')
+  if (!steps.length) {
+    toast(`${def.label} is already measured`)
     tool = null
     openSheet('results')
   } else {
@@ -328,6 +328,7 @@ function clearAll() {
   pushUndo()
   doc.measures = []
   doc.features = {}
+  skipped.clear()
   tool = null
   activeId = null
   selected = null
@@ -536,7 +537,7 @@ function updateHint() {
     if (cur) {
       const def = FEATURE_BY_ID[cur]
       const n = doc.features[cur]?.length ?? 0
-      text = `${steps.indexOf(cur) + 1}/${steps.length} · ${def.name}: ${def.prompts[Math.min(n, def.prompts.length - 1)]}`
+      text = `${guidedTitle} ${steps.indexOf(cur) + 1}/${steps.length} · ${def.name}: ${def.prompts[Math.min(n, def.prompts.length - 1)]}`
       actions.append(button('Skip', skipStep), button('Done', finishGuided))
     }
   } else if (src && tool && tool !== 'guided') {
@@ -586,6 +587,26 @@ function renderResults() {
   $('btn-facing').textContent = `Facing ${sag.facing > 0 ? 'right' : 'left'}${facingOverride ? '' : ' (auto)'}`
 }
 
+function renderGuided() {
+  const body = $('guided-body')
+  body.replaceChildren()
+  const values = new Map(sagittal().results.map((r) => [r.key, formatValue(r)]))
+  for (const group of MEASURE_GROUPS) {
+    body.append(el('h3', '', group.title))
+    const chips = el('div', 'chips')
+    for (const item of group.items) {
+      const b = button(item.label, () => startGuided(item), 'chip')
+      const v = values.get(item.key)
+      if (v) {
+        b.classList.add('done')
+        b.append(el('small', '', v))
+      }
+      chips.append(b)
+    }
+    body.append(chips)
+  }
+}
+
 function openSheet(id: SheetId | null) {
   sheet = id
   $('sheet').hidden = !id
@@ -611,6 +632,7 @@ function refresh() {
   $('btn-results').classList.toggle('on', sheet === 'results')
   $('empty').hidden = has
   if (sheet === 'results') renderResults()
+  if (sheet === 'guided') renderGuided()
   requestDraw()
 }
 
@@ -777,7 +799,6 @@ document.querySelectorAll<HTMLElement>('#tools [data-tool]').forEach((b) => {
   })
 })
 
-$('btn-guided-start').addEventListener('click', startGuided)
 $('btn-guided-clear').addEventListener('click', () => {
   if (!Object.keys(doc.features).length) return
   pushUndo()
@@ -867,29 +888,6 @@ document.addEventListener('keydown', (e) => {
     deleteMeasure(selected)
   }
 })
-
-// Region checkboxes for the guided workflow, remembering the last choice.
-{
-  let saved: RegionId[] = ['lumbopelvic']
-  try {
-    const raw = localStorage.getItem('regions')
-    if (raw) saved = JSON.parse(raw)
-  } catch {
-    /* fall back to the default */
-  }
-  const box = $('regions')
-  for (const r of REGIONS) {
-    const label = el('label', 'region')
-    const input = document.createElement('input')
-    input.type = 'checkbox'
-    input.id = `region-${r.id}`
-    input.checked = saved.includes(r.id)
-    const text = el('span', '', r.label)
-    text.append(el('small', '', r.gives))
-    label.append(input, text)
-    box.append(label)
-  }
-}
 
 syncAdjustInputs()
 refresh()
