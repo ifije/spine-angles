@@ -124,9 +124,56 @@ export async function exportView(input: ExportInput): Promise<'shared' | 'downlo
   return 'downloaded'
 }
 
-export function resultsText(doc: Doc, sagittal: SagittalResults, nameOf: (m: Measure) => string): string {
-  const lines: string[] = []
-  for (const m of doc.measures.filter(isDone)) lines.push(`${nameOf(m)}: ${measureText(m, doc.tilt)}`)
-  for (const r of sagittal.results) lines.push(`${r.key}: ${formatValue(r)}`)
-  return lines.join('\n')
+export interface ClipboardResults {
+  plain: string
+  html: string
+}
+
+const HEADER = 'Spine measurements (from photo, approximate)'
+const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * Results for the clipboard in two forms: an HTML table for apps that accept formatting
+ * (Mail, Notes, Word) and plain text for those that do not.
+ *
+ * The plain text must not begin with "WORD:" - iOS reads that as a URL scheme and Mail then
+ * pastes the whole thing percent-encoded. Hence the header line and no colons after names.
+ */
+export function resultsClipboard(doc: Doc, sagittal: SagittalResults, nameOf: (m: Measure) => string): ClipboardResults | null {
+  const rows: { name: string; short: string; value: string; note: string }[] = []
+  for (const m of doc.measures.filter(isDone)) {
+    rows.push({ name: nameOf(m), short: nameOf(m), value: measureText(m, doc.tilt) ?? '', note: '' })
+  }
+  for (const r of sagittal.results) {
+    rows.push({ name: `${r.label} (${r.key})`, short: r.key, value: formatValue(r), note: r.note ?? '' })
+  }
+  if (!rows.length) return null
+  const plain = [HEADER, ...rows.map((r) => `${r.short}  ${r.value}`)].join('\n')
+  const cell = (tag: string, text: string, align = 'left') =>
+    `<${tag} align="${align}" style="padding:4px 10px;border:1px solid #999">${esc(text)}</${tag}>`
+  const html =
+    `<p>${esc(HEADER)}</p>` +
+    '<table cellspacing="0" style="border-collapse:collapse">' +
+    `<tr>${cell('th', 'Parameter')}${cell('th', 'Value', 'right')}${cell('th', 'Note')}</tr>` +
+    rows.map((r) => `<tr>${cell('td', r.name)}${cell('td', r.value, 'right')}${cell('td', r.note)}</tr>`).join('') +
+    '</table>'
+  return { plain, html }
+}
+
+/** Put both forms on the clipboard; fall back to plain text where rich copy is unavailable. */
+export async function copyResults(c: ClipboardResults): Promise<void> {
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([c.html], { type: 'text/html' }),
+          'text/plain': new Blob([c.plain], { type: 'text/plain' }),
+        }),
+      ])
+      return
+    } catch {
+      // Try the plain route below.
+    }
+  }
+  await navigator.clipboard.writeText(c.plain)
 }

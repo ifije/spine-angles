@@ -3,7 +3,7 @@ import { Pt, dist, mid } from './geometry'
 import { Doc, Mat, Measure, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, isDone, measureText } from './model'
 import { drawOverlay, colorFor } from './draw'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
-import { exportView, resultsText } from './export'
+import { exportView, resultsClipboard, copyResults } from './export'
 import {
   FEATURES, FEATURE_BY_ID, REGIONS, FeatureId, RegionId,
   stepsFor, isComplete, compute, formatValue,
@@ -777,10 +777,10 @@ $('in-age').addEventListener('input', (e) => {
   refresh()
 })
 $('btn-copy').addEventListener('click', async () => {
-  const text = resultsText(doc, sagittal(), measureName)
-  if (!text) return toast('Nothing to copy yet')
+  const results = resultsClipboard(doc, sagittal(), measureName)
+  if (!results) return toast('Nothing to copy yet')
   try {
-    await navigator.clipboard.writeText(text)
+    await copyResults(results)
     toast('Results copied')
   } catch {
     toast('Copy was blocked by the browser')
