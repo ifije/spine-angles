@@ -6,7 +6,8 @@ import { Pt, dist, mid } from './geometry'
 import { Doc, Mat, Measure, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, isDone, measureText } from './model'
 import { drawOverlay, colorFor } from './draw'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
-import { exportView, resultsClipboard, copyResults } from './export'
+import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
+import { buildLabels, hasLabels } from './labels'
 import {
   FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef, Plane,
   stepsFor, isComplete, compute, formatValue,
@@ -965,6 +966,46 @@ $('btn-copy').addEventListener('click', async () => {
     toast('Results copied')
   } catch {
     toast('Copy was blocked by the browser')
+  }
+})
+
+const LABELS_NOTICE = 'spine-angles:labels-notice'
+$('btn-labels').addEventListener('click', async () => {
+  if (!src) return toast('Choose a photo first')
+  const sag = sagittal()
+  const id = `spine-labels-${fileStamp()}`
+  const record = buildLabels({
+    doc, width: src.width, height: src.height,
+    facing: sag.facing, facingAuto: !facingOverride,
+    skipped: [...skipped], results: sag.results,
+    imageFile: `${id}.jpg`, imageId: id,
+    saved: new Date().toISOString(), appVersion: __APP_VERSION__,
+  })
+  if (!hasLabels(record)) return toast('Place some landmarks first')
+  // Unlike Share, this saves the whole photo, so say so once.
+  let seen = false
+  try {
+    seen = localStorage.getItem(LABELS_NOTICE) === '1'
+  } catch {
+    // Storage unavailable: ask every time.
+  }
+  if (!seen) {
+    const ok = confirm(
+      'Save labels stores the whole photo together with the landmark positions.\n\n' +
+        'Anything visible on the photo, such as a name or date, is included. Continue?',
+    )
+    if (!ok) return
+    try {
+      localStorage.setItem(LABELS_NOTICE, '1')
+    } catch {
+      // Not remembered; the question comes back next time.
+    }
+  }
+  try {
+    const outcome = await saveLabels(src, record)
+    if (outcome === 'downloaded') toast('Photo and labels saved')
+  } catch {
+    toast('Could not save the labels')
   }
 })
 

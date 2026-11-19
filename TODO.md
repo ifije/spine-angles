@@ -36,6 +36,12 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [ ] Other coronal angles if wanted: clavicle angle, L4/L5 tilt, end-vertebra tilt, sacral obliquity
 - [ ] Coronal balance (needs calibration, or an angle-based stand-in)
 
+## Labelling (added 2026-11-18)
+- [x] Save labels: photo plus a landmark record in the `spine-labels/1` format
+- [ ] Check Save labels on a real iPhone (share sheet with two files, Save to Files)
+- [ ] Reopen a saved photo and record to continue or correct it
+- [ ] Option to save only the on-screen region, to keep names out of the saved photo
+
 ## Phase 3 — Install and deploy
 - [x] Manifest, icons, service worker with versioned cache
 - [x] Deploy to GitHub Pages (auto-deploys on push to `main`)

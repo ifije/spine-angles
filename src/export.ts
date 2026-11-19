@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Wolfray Applied Technologies, LLC
 
-// Export of the current view as a shareable JPEG, and results as plain text.
+// Export of the current view as a shareable JPEG, results as plain text, and labelled examples.
 
 import { Doc, Mat, Measure, isDone, measureText } from './model'
 import { drawOverlay } from './draw'
 import { bakeTone, Tone } from './image'
 import { SagittalResults, formatValue } from './sagittal'
+import type { LabelRecord } from './labels'
 
 export interface ExportInput {
   src: HTMLCanvasElement
@@ -102,31 +103,54 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
   return c
 }
 
-/** Share through the system share sheet where available, otherwise download. */
-export async function exportView(input: ExportInput): Promise<'shared' | 'downloaded' | 'cancelled'> {
-  const canvas = renderExport(input)
-  const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.92))
-  if (!blob) throw new Error('export failed')
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  const file = new File([blob], `spine-angles-${stamp}.jpg`, { type: 'image/jpeg' })
-  if (navigator.canShare?.({ files: [file] })) {
+type Delivery = 'shared' | 'downloaded' | 'cancelled'
+
+/** Hand files to the system share sheet where it accepts them, otherwise download them. */
+async function deliver(files: File[]): Promise<Delivery> {
+  if (navigator.canShare?.({ files })) {
     try {
-      await navigator.share({ files: [file] })
+      await navigator.share({ files })
       return 'shared'
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled'
       // Fall through to a download if sharing was refused.
     }
   }
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = file.name
-  document.body.append(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  for (const [i, file] of files.entries()) {
+    // Browsers drop a second download started in the same instant as the first.
+    if (i) await new Promise((res) => setTimeout(res, 400))
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = file.name
+    document.body.append(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
   return 'downloaded'
+}
+
+const jpeg = (canvas: HTMLCanvasElement, quality: number) =>
+  new Promise<Blob>((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error('export failed'))), 'image/jpeg', quality))
+
+/** Timestamp for file names, e.g. 2026-11-18-17-03-59. */
+export const fileStamp = (d = new Date()): string => d.toISOString().slice(0, 19).replace(/[:T]/g, '-')
+
+/** Share through the system share sheet where available, otherwise download. */
+export async function exportView(input: ExportInput): Promise<Delivery> {
+  const blob = await jpeg(renderExport(input), 0.92)
+  return deliver([new File([blob], `spine-angles-${fileStamp()}.jpg`, { type: 'image/jpeg' })])
+}
+
+/**
+ * Save a labelled example: the whole photo as loaded (no overlay, no brightness or contrast
+ * change) and its label record, as two files that share a name.
+ */
+export async function saveLabels(src: HTMLCanvasElement, record: LabelRecord): Promise<Delivery> {
+  const image = new File([await jpeg(src, 0.95)], record.image.path, { type: 'image/jpeg' })
+  const labels = new File([JSON.stringify(record, null, 1)], `${record.image_id}.json`, { type: 'application/json' })
+  return deliver([image, labels])
 }
 
 export interface ClipboardResults {

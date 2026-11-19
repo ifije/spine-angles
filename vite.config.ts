@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config'
 import { VitePWA } from 'vite-plugin-pwa'
+import pkg from './package.json'
 
 export default defineConfig({
   // Relative paths so the build works from any sub-path (e.g. GitHub Pages).
   base: './',
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',

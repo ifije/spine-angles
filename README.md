@@ -58,6 +58,18 @@ Each guided result is drawn on the image where it is measured. Tap a result in *
 - **Share** saves or sends exactly what is on screen, with the values printed underneath. Pan or zoom first to keep a patient name out of frame.
 - **Copy results** (in Results) puts the values on the clipboard as a table for Mail, Notes or Word, with plain text for everything else.
 
+### Building a labelled set
+
+**Save labels** (in Results) saves two files with the same name: the whole photo as loaded (JPEG, with no overlay and no brightness change) and a `.json` record of every landmark you placed. Use it to collect your own labelled films, for example to train or test automatic landmark detection.
+
+- Each landmark is named by level and position: `S1_sup_ant`, `S1_sup_post`, `L1_sup_ant`, `T12_inf_post`, `T1_center`, `femoral_head_a_center`. The ends of coronal lines are `_l` and `_r` by image side.
+- Coordinates are pixels of the saved photo, x to the right and y down. The Level rotation is recorded (`app.level_deg`) but not applied.
+- Which end of an endplate is anterior comes from the Facing direction, so check **Facing** before saving.
+- A landmark you skipped in a guided measurement is listed under `labels.not_visible`.
+- The computed parameters are included under `measurements`.
+
+Unlike Share, this saves the **whole photo**, including any name or date visible on it. Crop the photo before loading it if that matters. Nothing is uploaded; the files go wherever you send them from the share sheet.
+
 ## Reference values
 
 Results show Schwab modifiers, age-adjusted targets (enter the age in Results) and similar guides beside some values. These are aids, not recommendations; check them against your own sources before relying on them.
