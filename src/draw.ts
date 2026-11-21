@@ -115,13 +115,16 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, M: Mat, doc: Doc, o: 
     if (!pts || !pts.length) continue
     const s = pts.map(S)
     const hot = o.selectedFeature === def.id
+    // A question mark stays on a landmark that an automatic guess placed until someone moves or keeps it.
+    const guessed = doc.auto?.[def.id] !== undefined
+    const tag = guessed ? `${def.tag}?` : def.tag
     if (def.kind === 'line') {
       if (s.length === 2) {
         seg(s[0], s[1], C_ENDPLATE, hot ? 3.5 : 2)
         const d = dist(s[0], s[1]) || 1
         const u = { x: (s[0].x - s[1].x) / d, y: (s[0].y - s[1].y) / d }
         const named = CORONAL_KEY[def.id]
-        if (!(named && val.has(named))) label(def.tag, { x: s[0].x + u.x * 14 * k, y: s[0].y + u.y * 14 * k }, C_ENDPLATE, u.x >= 0 ? 'left' : 'right', 12)
+        if (!(named && val.has(named))) label(tag, { x: s[0].x + u.x * 14 * k, y: s[0].y + u.y * 14 * k }, C_ENDPLATE, u.x >= 0 ? 'left' : 'right', 12)
       }
       s.forEach((p) => ring(p, C_ENDPLATE, hot ? 8 : 6))
     } else if (def.kind === 'circle') {
@@ -137,9 +140,10 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, M: Mat, doc: Doc, o: 
         ring(s[1], C_PELVIS, 4)
       }
       ring(s[0], C_PELVIS, hot ? 8 : 6)
+      if (guessed) label(tag, { x: s[0].x + 12 * k, y: s[0].y }, C_PELVIS, 'left', 12)
     } else {
       ring(s[0], C_BODY, hot ? 8 : 6)
-      label(def.tag, { x: s[0].x + 12 * k, y: s[0].y }, C_BODY, 'left', 12)
+      label(tag, { x: s[0].x + 12 * k, y: s[0].y }, C_BODY, 'left', 12)
     }
   }
 

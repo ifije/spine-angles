@@ -6,7 +6,7 @@
 
 import { Doc, ToolKind, isDone, measureText } from './model'
 import { Pt, dist, rot } from './geometry'
-import { FEATURES, FeatureId, Result } from './sagittal'
+import { FEATURES, FeatureId, Features, Result } from './sagittal'
 
 export const LABEL_SCHEMA = 'spine-labels/1'
 
@@ -40,7 +40,10 @@ export interface LabelLandmark {
   x: number
   y: number
   visible: boolean
+  /** 'auto' for a landmark an automatic guess placed and nobody moved; null for one placed or moved by hand. */
   annotator: string | null
+  /** Only in a record that is itself an automatic guess: how sure the detector is, 0 to 1. */
+  confidence?: number
 }
 
 export interface LabelRecord {
@@ -56,7 +59,7 @@ export interface LabelRecord {
   synthetic: false
   standing: null
   landmarks: LabelLandmark[]
-  circles: { name: string; cx: number; cy: number; r: number; annotator: string | null }[]
+  circles: { name: string; cx: number; cy: number; r: number; annotator: string | null; confidence?: number }[]
   polygons: never[]
   boxes: never[]
   masks: never[]
@@ -124,7 +127,9 @@ export function buildLabels(input: LabelInput): LabelRecord {
   const level = (p: Pt) => (doc.tilt ? rot(p, doc.tilt) : p)
   const landmarks: LabelLandmark[] = []
   const circles: LabelRecord['circles'] = []
-  const add = (name: string, p: Pt) => landmarks.push({ name, x: r2(p.x), y: r2(p.y), visible: true, annotator: null })
+  let who: string | null = null
+  let anyAuto = false
+  const add = (name: string, p: Pt) => landmarks.push({ name, x: r2(p.x), y: r2(p.y), visible: true, annotator: who })
   let sagittal = false
   let coronal = false
   let sagittalLine = false
@@ -132,13 +137,15 @@ export function buildLabels(input: LabelInput): LabelRecord {
   for (const f of FEATURES) {
     const pts = doc.features[f.id]
     if (!pts || !pts.length) continue
+    who = doc.auto?.[f.id] !== undefined ? 'auto' : null
+    anyAuto ||= who !== null
     const head = HEADS[f.id]
     const point = SAG_POINTS[f.id]
     const plate = SAG_LINES[f.id]
     const stem = COR_LINES[f.id]
     if (head) {
       add(`${head}_center`, pts[0])
-      if (pts.length >= 2) circles.push({ name: head, cx: r2(pts[0].x), cy: r2(pts[0].y), r: r2(dist(pts[0], pts[1])), annotator: null })
+      if (pts.length >= 2) circles.push({ name: head, cx: r2(pts[0].x), cy: r2(pts[0].y), r: r2(dist(pts[0], pts[1])), annotator: who })
       sagittal = true
     } else if (point) {
       add(point, pts[0])
@@ -194,7 +201,10 @@ export function buildLabels(input: LabelInput): LabelRecord {
     labels: { not_visible: input.skipped.filter((id) => !doc.features[id]).map(featureLabel) },
     patient: {},
     source_labels: 'Spine Angles app',
-    notes: 'Labelled by hand on a photograph. If the photo was taken at an angle to the film, the geometry is skewed.',
+    notes:
+      (anyAuto
+        ? 'Landmarks whose annotator is "auto" were placed by an automatic guess and saved where it put them; the rest were placed or moved by hand. '
+        : 'Labelled by hand on a photograph. ') + 'If the photo was taken at an angle to the film, the geometry is skewed.',
     app: {
       name: 'Spine Angles',
       version: input.appVersion,
@@ -213,3 +223,60 @@ export function buildLabels(input: LabelInput): LabelRecord {
 
 /** True when there is something worth saving. */
 export const hasLabels = (r: LabelRecord): boolean => r.landmarks.length > 0 || r.app.free_measurements.length > 0
+
+/** The rim point the app keeps for a femoral head of radius r: up and to the right of the centre. */
+export const rimPoint = (c: Pt, r: number): Pt => ({ x: c.x + r * Math.SQRT1_2, y: c.y - r * Math.SQRT1_2 })
+
+export interface ReadLabels {
+  features: Features
+  /** Lowest confidence among each landmark's points, where the record gives one. */
+  confidence: Partial<Record<FeatureId, number>>
+}
+
+/**
+ * Guided landmarks from a label record: the way back from `buildLabels`, for the names the
+ * app knows. Used to load an automatic guess. Names the app has no landmark for are ignored,
+ * as is any landmark with a point missing. `headRadius` is used for a femoral head that
+ * comes without its circle.
+ */
+export function readLabels(rec: Pick<LabelRecord, 'landmarks' | 'circles'>, headRadius: number): ReadLabels {
+  const at = new Map<string, LabelLandmark>()
+  for (const l of rec.landmarks ?? []) {
+    if (l.visible !== false && Number.isFinite(l.x) && Number.isFinite(l.y)) at.set(l.name, l)
+  }
+  const features: Features = {}
+  const confidence: ReadLabels['confidence'] = {}
+  const put = (id: FeatureId, pts: Pt[], from: { confidence?: number }[]) => {
+    features[id] = pts
+    const c = from.map((l) => l.confidence).filter((v): v is number => typeof v === 'number')
+    if (c.length) confidence[id] = Math.min(...c)
+  }
+  const pt = (l: LabelLandmark): Pt => ({ x: l.x, y: l.y })
+  const s1a = at.get('S1_sup_ant')
+  const s1p = at.get('S1_sup_post')
+  for (const f of FEATURES) {
+    const head = HEADS[f.id]
+    const point = SAG_POINTS[f.id]
+    const plate = SAG_LINES[f.id]
+    const stem = COR_LINES[f.id]
+    if (head) {
+      const c = at.get(`${head}_center`)
+      if (!c) continue
+      const circle = (rec.circles ?? []).find((k) => k.name === head && k.r > 0)
+      const r = circle ? circle.r : s1a && s1p ? 0.7 * dist(pt(s1a), pt(s1p)) : headRadius
+      put(f.id, [pt(c), rimPoint(pt(c), r)], [c])
+    } else if (point) {
+      const c = at.get(point)
+      if (c) put(f.id, [pt(c)], [c])
+    } else if (plate) {
+      const a = at.get(`${plate[0]}_${plate[1]}_ant`)
+      const b = at.get(`${plate[0]}_${plate[1]}_post`)
+      if (a && b) put(f.id, [pt(a), pt(b)], [a, b])
+    } else if (stem) {
+      const l = at.get(`${stem}_l`)
+      const r = at.get(`${stem}_r`)
+      if (l && r) put(f.id, [pt(l), pt(r)], [l, r])
+    }
+  }
+  return { features, confidence }
+}

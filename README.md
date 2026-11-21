@@ -70,6 +70,17 @@ Each guided result is drawn on the image where it is measured. Tap a result in *
 
 Unlike Share, this saves the **whole photo**, including any name or date visible on it. Crop the photo before loading it if that matters. Nothing is uploaded; the files go wherever you send them from the share sheet.
 
+### Automatic guess (optional, needs your own detector)
+
+The app can ask a landmark detector that **you run yourself** for a first guess, then leave the correcting to you. It is off unless the app finds such a detector, so for everyone else nothing changes and nothing is uploaded.
+
+- With a detector present, an **Auto** button appears and each photo you open is sent to it. The femoral heads, S1, L4, L1 and the L1 body come back as ordinary landmarks, each tagged with a question mark (`S1?`) to show that nobody has checked it.
+- Drag any of them into place, or tap one and choose **Delete** if it is wrong (a femoral head drawn where there is none, say) or **Keep** if it is right. Moving or keeping a landmark removes its question mark. **Undo** takes back the whole guess.
+- **Auto** again replaces only the guesses you have not touched.
+- In **Save labels**, a landmark left exactly where the guess put it is recorded with `"annotator": "auto"`; everything you placed, moved or kept has `null`.
+
+The app looks for a detector at the address it was loaded from, or at `?detector=http://host:port/` added to the page address (remembered; `?detector=` forgets it). A detector is any service that answers `GET health` with `{"service": "spine-guess"}` and `POST guess` (the photo as JPEG) with a record in the Save labels format. The photo is sent to that address only.
+
 ## Reference values
 
 Results show Schwab modifiers, age-adjusted targets (enter the age in Results) and similar guides beside some values. These are aids, not recommendations; check them against your own sources before relying on them.

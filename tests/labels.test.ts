@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Wolfray Applied Technologies, LLC
 
 import { describe, it, expect } from 'vitest'
-import { buildLabels, hasLabels, featureLabel, LABEL_SCHEMA, LabelInput } from '../src/labels'
+import { buildLabels, hasLabels, featureLabel, readLabels, rimPoint, LABEL_SCHEMA, LabelInput } from '../src/labels'
 import { compute, Features } from '../src/sagittal'
 import type { Doc } from '../src/model'
 
@@ -135,5 +135,57 @@ describe('label export', () => {
     expect(r.landmarks).toHaveLength(8 * 2 + 3 + 2)
     for (const l of r.landmarks) expect(scheme.some((re) => re.test(l.name)), l.name).toBe(true)
     expect(new Set(r.landmarks.map((l) => l.name)).size).toBe(r.landmarks.length)
+  })
+})
+
+describe('reading labels back (an automatic guess)', () => {
+  const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y)
+
+  it('gives back the landmarks a saved record was built from', () => {
+    const features: Features = {
+      fh1: [P(1500, 3000), P(1560, 3000)], fh2: [P(1520, 3010), P(1580, 3010)], s1: pelvisRight.s1, l4: [P(1450, 2300), P(1300, 2280)],
+      l1: pelvisRight.l1, l1c: [P(1420, 1850)], t12: [P(1490, 1700), P(1340, 1690)], c2: [P(1280, 300), P(1200, 280)],
+    }
+    const back = readLabels(build(features), 50).features
+    expect(Object.keys(back).sort()).toEqual(Object.keys(features).sort())
+    for (const id of ['s1', 'l4', 'l1', 'l1c', 't12', 'c2'] as const) expect(back[id]).toEqual(features[id])
+    // A head comes back as its centre and a rim point at the same radius.
+    expect(back.fh1![0]).toEqual(P(1500, 3000))
+    expect(dist(back.fh1![0], back.fh1![1])).toBeCloseTo(60, 1)
+    expect(compute(back).results.find((r) => r.key === 'PI')!.value).toBeCloseTo(compute(features).results.find((r) => r.key === 'PI')!.value, 1)
+  })
+
+  it('reads a guess: extra levels ignored, half a line ignored, confidence kept', () => {
+    const lm = (name: string, x: number, y: number, confidence: number) => ({ name, x, y, visible: true, annotator: 'auto', confidence })
+    const got = readLabels({
+      landmarks: [
+        lm('S1_sup_ant', 400, 900, 0.6), lm('S1_sup_post', 500, 850, 0.8), lm('L1_sup_ant', 380, 300, 0.4), lm('L1_sup_post', 480, 310, 0.4),
+        lm('L3_inf_ant', 370, 600, 0.4), lm('L3_inf_post', 470, 610, 0.4), lm('L4_sup_ant', 372, 640, 0.4),
+        lm('L1_center', 430, 340, 0.4), lm('femoral_head_a_center', 300, 1100, 0.9), lm('femoral_head_b_center', 320, 1110, 0.9),
+      ],
+      circles: [{ name: 'femoral_head_a', cx: 300, cy: 1100, r: 44, annotator: 'auto' }],
+    }, 30)
+    expect(Object.keys(got.features).sort()).toEqual(['fh1', 'fh2', 'l1', 'l1c', 's1'])
+    expect(got.features.s1).toEqual([P(400, 900), P(500, 850)])
+    expect(got.confidence.s1).toBe(0.6)
+    expect(got.confidence.fh1).toBe(0.9)
+    expect(got.features.fh1![1]).toEqual(rimPoint(P(300, 1100), 44))
+    // No circle for the second head: its radius is taken from the S1 length.
+    expect(dist(got.features.fh2![0], got.features.fh2![1])).toBeCloseTo(0.7 * Math.hypot(100, 50), 5)
+    expect(readLabels({ landmarks: [lm('femoral_head_a_center', 10, 10, 0.5)], circles: [] }, 30).features.fh1![1]).toEqual(rimPoint(P(10, 10), 30))
+  })
+
+  it('marks untouched guesses as such when they are saved, and only those', () => {
+    const doc: Doc = { measures: [], features: { ...pelvisRight }, tilt: 0, auto: { s1: 0.6, fh1: 0.9 } }
+    const sag = compute(doc.features)
+    const r = buildLabels({
+      doc, width: 3000, height: 4000, facing: sag.facing, facingAuto: true, skipped: [], results: sag.results,
+      imageFile: 'x.jpg', imageId: 'x', saved: '2026-11-20T00:00:00.000Z', appVersion: 'test',
+    })
+    const who = Object.fromEntries(r.landmarks.map((l) => [l.name, l.annotator]))
+    expect(who).toMatchObject({ S1_sup_ant: 'auto', S1_sup_post: 'auto', femoral_head_a_center: 'auto', L1_sup_ant: null, L1_sup_post: null })
+    expect(r.circles[0].annotator).toBe('auto')
+    expect(r.notes).toContain('automatic guess')
+    expect(build(pelvisRight).notes).toContain('Labelled by hand')
   })
 })

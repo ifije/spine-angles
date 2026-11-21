@@ -4,7 +4,7 @@
 // Document model shared by the UI, drawing and export code.
 
 import { Pt, rot, cobbAngle, angle3, slopeInfo } from './geometry'
-import type { Features } from './sagittal'
+import type { Features, FeatureId } from './sagittal'
 
 export type ToolKind = 'cobb' | 'angle3' | 'slope'
 
@@ -22,6 +22,11 @@ export interface Doc {
   features: Features
   /** Levelling rotation applied to the photo, degrees. */
   tilt: number
+  /**
+   * Guided landmarks that an automatic guess placed and nobody has moved or kept since, with
+   * the detector's confidence (0 to 1). Kept in the document so that undo restores it.
+   */
+  auto?: Partial<Record<FeatureId, number>>
 }
 
 export const isDone = (m: Measure): boolean => m.pts.length >= NEED[m.kind]

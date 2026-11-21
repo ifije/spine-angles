@@ -7,7 +7,8 @@ import { Doc, Mat, Measure, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, is
 import { drawOverlay, colorFor } from './draw'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
-import { buildLabels, hasLabels } from './labels'
+import { buildLabels, hasLabels, readLabels } from './labels'
+import { findDetector, requestGuess } from './auto'
 import {
   FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef, Plane,
   stepsFor, isComplete, compute, formatValue,
@@ -57,6 +58,11 @@ try {
 const skipped = new Set<FeatureId>()
 let facingOverride = 0
 let age: number | undefined
+/** Address of a detector the user runs for automatic guesses, or null (the normal case). */
+let detector: string | null = null
+/** Counts guess requests: a reply is used only if it is still the latest and for the same photo. */
+let guessToken = 0
+let guessing = false
 
 type SheetId = 'adjust' | 'guided' | 'results'
 let sheet: SheetId | null = null
@@ -348,6 +354,55 @@ function deleteFeature(id: FeatureId) {
   refresh()
 }
 
+/** Accept an automatic guess where it is: it stops being marked as a guess. */
+function keepFeature(id: FeatureId) {
+  if (doc.auto?.[id] === undefined) return
+  pushUndo()
+  delete doc.auto[id]
+  refresh()
+}
+
+// ---------------------------------------------------------------- automatic guess
+
+/**
+ * Ask the detector for its best guess and place it as ordinary landmarks, to be dragged,
+ * kept or deleted. Landmarks a person placed, moved or kept are left alone; guesses from an
+ * earlier run that nobody touched are replaced.
+ */
+async function runGuess() {
+  if (!src || !detector || guessing) return
+  const photo = src
+  const token = ++guessToken
+  guessing = true
+  refresh()
+  try {
+    const rec = await requestGuess(detector, photo)
+    if (token !== guessToken || photo !== src) return
+    const got = readLabels(rec, 0.035 * Math.max(photo.width, photo.height))
+    pushUndo()
+    const stale = Object.keys(doc.auto ?? {}) as FeatureId[]
+    for (const id of stale) delete doc.features[id]
+    doc.auto = {}
+    let n = 0
+    for (const f of FEATURES) {
+      const pts = got.features[f.id]
+      if (!pts || doc.features[f.id]) continue
+      doc.features[f.id] = pts
+      doc.auto[f.id] = got.confidence[f.id] ?? 0
+      n++
+    }
+    if (!n && !stale.length) undoStack.pop() // nothing changed, so there is nothing to undo
+    toast(n ? `${n} landmark${n > 1 ? 's' : ''} guessed. Drag to adjust; tap one to delete it.` : 'Nothing was found to place on this photo')
+  } catch (err) {
+    if (token === guessToken) toast(`No automatic guess: ${err instanceof Error ? err.message : 'it failed'}`)
+  } finally {
+    if (token === guessToken) {
+      guessing = false
+      refresh()
+    }
+  }
+}
+
 /** Clear one group: the basic tools' measurements, or one plane's guided landmarks. */
 function clearGroup(group: 'basic' | Plane) {
   pushUndo()
@@ -405,6 +460,8 @@ function hitHandle(screen: Pt, radius: number): Handle | null {
 
 function moveHandle(h: Handle, p: Pt) {
   const old = h.pts[h.i]
+  // A guess that has been moved is the user's landmark from then on.
+  if (h.feature && doc.auto) delete doc.auto[h.feature]
   h.pts[h.i] = p
   // Dragging a femoral head's centre carries its rim point with it.
   if (h.feature && FEATURE_BY_ID[h.feature].kind === 'circle' && h.i === 0 && h.pts[1]) {
@@ -600,7 +657,9 @@ function updateHint() {
     }
   } else if (src && selectedFeature && doc.features[selectedFeature]) {
     const id = selectedFeature
-    text = `${FEATURE_BY_ID[id].name} landmark`
+    const guessed = doc.auto?.[id] !== undefined
+    text = `${FEATURE_BY_ID[id].name} landmark${guessed ? ' (automatic guess)' : ''}`
+    if (guessed) actions.append(button('Keep', () => keepFeature(id)))
     actions.append(button('Delete', () => deleteFeature(id), 'danger'))
   } else if (src && focus) {
     const r = sagittal().results.find((x) => x.key === focus)
@@ -611,6 +670,8 @@ function updateHint() {
         refresh()
       }))
     }
+  } else if (src && guessing) {
+    text = 'Finding landmarks…'
   }
   $('hint-text').textContent = text
   hint.hidden = !text
@@ -705,8 +766,13 @@ function refresh() {
   // An isolated result that no longer exists (landmark cleared or undone) stops being isolated.
   if (focus && !sagittal().results.some((r) => r.key === focus)) focus = null
   if (selectedFeature && !doc.features[selectedFeature]) selectedFeature = null
+  // A landmark that is gone is no longer anybody's guess.
+  if (doc.auto) for (const id of Object.keys(doc.auto) as FeatureId[]) if (!doc.features[id]) delete doc.auto[id]
   updateHint()
   const has = !!src
+  const btnAuto = $<HTMLButtonElement>('btn-auto')
+  btnAuto.hidden = !detector
+  btnAuto.disabled = !has || guessing
   $<HTMLButtonElement>('btn-undo').disabled = !undoStack.length
   for (const id of ['btn-adjust', 'btn-clear', 'btn-share']) $<HTMLButtonElement>(id).disabled = !has
   $('btn-adjust').classList.toggle('on', sheet === 'adjust')
@@ -778,6 +844,10 @@ async function openPhoto(file: Blob) {
     resize()
     fit()
   })
+  // A reply still on its way belongs to the previous photo.
+  guessToken++
+  guessing = false
+  if (detector) void runGuess()
 }
 
 function transformPhoto(next: HTMLCanvasElement, map: (p: Pt) => Pt) {
@@ -872,6 +942,21 @@ stage.addEventListener('drop', (e) => {
 }
 
 $('btn-undo').addEventListener('click', undo)
+$('btn-auto').addEventListener('click', () => void runGuess())
+// Only a user who runs a detector has one; for everyone else this finds nothing and the app is unchanged.
+void findDetector().then((found) => {
+  detector = found
+  if (!found) return
+  let where = found
+  try {
+    where = new URL(found).host
+  } catch {
+    // Keep the address as given.
+  }
+  $('note-privacy').textContent = `Automatic guess is on: each photo you open is sent to the detector at ${where} to find landmarks, and nowhere else.`
+  refresh()
+  if (src && !doc.measures.length && !Object.keys(doc.features).length) void runGuess()
+})
 $('btn-clear').addEventListener('click', clearAll)
 $('btn-adjust').addEventListener('click', () => toggleSheet('adjust'))
 $('btn-results').addEventListener('click', () => toggleSheet('results'))
