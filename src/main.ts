@@ -12,8 +12,8 @@ import {
   findDetector, findService, requestGuess, addDetectorFile, removeDetectorFile, endDetector, NotOffered, DetectorFileError, type Detector, type Found,
 } from './auto'
 import {
-  FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef, Plane,
-  stepsFor, isComplete, compute, formatValue,
+  FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, MEASURE_BY_KEY, FeatureId, MeasureDef, MeasureState, NeedState, Plane, Result,
+  stepsFor, isComplete, compute, formatValue, measureState, needsText,
 } from './sagittal'
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -50,6 +50,16 @@ let focus: string | null = null
 let steps: FeatureId[] = []
 /** Name of the measurement being guided, shown in the prompt. */
 let guidedTitle = ''
+/** A landmark being placed again: it stays where it is until the first tap starts it anew. */
+let replacing: FeatureId | null = null
+/** The measurement whose own panel is open in the Guided sheet (its key), or null for the list. */
+let panelKey: string | null = null
+/** Where that panel was opened from, so that Back returns there. */
+let panelFrom: 'guided' | 'results' = 'guided'
+/** Where the Guided list was scrolled to before a panel opened. */
+let listScroll = 0
+/** Results' "Not measured yet" list: open or closed by the user, or null to have it open only while nothing is measured. */
+let notYetOpen: boolean | null = null
 /** Which set of guided measurements the Guided and Results panels show. */
 let plane: Plane = 'sagittal'
 try {
@@ -160,21 +170,40 @@ function resize() {
 }
 new ResizeObserver(resize).observe(stage)
 
-/** Scale and centre the (levelled) photo in the stage. */
-function fit() {
-  if (!src || !W) return
+/** The view that scales and centres the (levelled) photo in the stage. */
+function fitView(): { s: number; tx: number; ty: number } {
   const m = matrix(1, doc.tilt, 0, 0)
-  const cs = [{ x: 0, y: 0 }, { x: src.width, y: 0 }, { x: 0, y: src.height }, { x: src.width, y: src.height }].map((p) => apply(m, p))
+  const cs = [{ x: 0, y: 0 }, { x: src!.width, y: 0 }, { x: 0, y: src!.height }, { x: src!.width, y: src!.height }].map((p) => apply(m, p))
   const xs = cs.map((p) => p.x)
   const ys = cs.map((p) => p.y)
   const minX = Math.min(...xs)
   const minY = Math.min(...ys)
   const bw = Math.max(...xs) - minX
   const bh = Math.max(...ys) - minY
-  view.s = Math.min(W / bw, H / bh) * 0.96
-  view.tx = W / 2 - view.s * (minX + bw / 2)
-  view.ty = H / 2 - view.s * (minY + bh / 2)
+  const s = Math.min(W / bw, H / bh) * 0.96
+  return { s, tx: W / 2 - s * (minX + bw / 2), ty: H / 2 - s * (minY + bh / 2) }
+}
+
+/** Scale and centre the (levelled) photo in the stage. */
+function fit() {
+  if (!src || !W) return
+  Object.assign(view, fitView())
   requestDraw()
+}
+
+/** Bring a landmark to the middle of the stage, at least twice the fitted size, and select it. */
+function showFeature(id: FeatureId) {
+  const pts = doc.features[id]
+  if (!src || !W || !pts?.length) return
+  const c = FEATURE_BY_ID[id].kind === 'line' && pts.length === 2 ? mid(pts[0], pts[1]) : pts[0]
+  const s = Math.min(12, Math.max(view.s, 2 * fitView().s))
+  const q = apply(matrix(s, doc.tilt, 0, 0), c)
+  view.s = s
+  view.tx = W / 2 - q.x
+  view.ty = H / 2 - q.y
+  selected = null
+  selectedFeature = id
+  refresh()
 }
 
 function zoomAt(p: Pt, factor: number) {
@@ -199,7 +228,7 @@ function setTilt(deg: number) {
 
 // ---------------------------------------------------------------- undo
 
-const snapshot = () => JSON.stringify({ doc, activeId })
+const snapshot = () => JSON.stringify({ doc, activeId, replacing })
 
 function pushUndo(snap = snapshot()) {
   undoStack.push(snap)
@@ -209,8 +238,9 @@ function pushUndo(snap = snapshot()) {
 function undo() {
   const snap = undoStack.pop()
   if (!snap) return
-  const s = JSON.parse(snap) as { doc: Doc; activeId: number | null }
+  const s = JSON.parse(snap) as { doc: Doc; activeId: number | null; replacing?: FeatureId | null }
   doc = s.doc
+  replacing = tool === 'guided' ? s.replacing ?? null : null
   const partial = doc.measures.find((m) => !isDone(m))
   if (partial) {
     activeId = partial.id
@@ -220,6 +250,8 @@ function undo() {
   }
   if (selected !== null && !doc.measures.some((m) => m.id === selected)) selected = null
   syncAdjustInputs()
+  // Undone past everything the prompts asked for: the prompts are over.
+  if (tool === 'guided' && !currentStep()) return finishGuided()
   refresh()
 }
 
@@ -232,7 +264,7 @@ const FREE_PROMPTS: Record<ToolKind, string[]> = {
 }
 
 const currentStep = (): FeatureId | undefined =>
-  steps.find((id) => !isComplete(doc.features, id) && !skipped.has(id))
+  steps.find((id) => id === replacing || (!isComplete(doc.features, id) && !skipped.has(id)))
 
 /** Drop half-placed free measurements and half-placed landmarks. */
 function dropPartials() {
@@ -256,31 +288,35 @@ function armTool(kind: ToolKind) {
   refresh()
 }
 
-function startGuided(def: MeasureDef) {
+/**
+ * Prompt for these landmarks, one tap at a time in the usual order (caudal to cranial), then come back to the open
+ * measurement's panel. `again` is a landmark that is there already and is to be placed anew: it stays until the first tap.
+ */
+function placeLandmarks(ids: FeatureId[], title: string, again: FeatureId | null = null) {
   dropPartials()
-  // A second femoral head that was skipped stays skipped until landmarks are cleared.
-  const keepFh2 = skipped.has('fh2') && isComplete(doc.features, 'fh1')
+  // A second femoral head that was skipped stays skipped until landmarks are cleared, unless it is asked for.
+  const keepFh2 = skipped.has('fh2') && isComplete(doc.features, 'fh1') && !ids.includes('fh2')
   skipped.clear()
   if (keepFh2) skipped.add('fh2')
-  // Only prompt for what this measurement needs and is not placed yet.
-  steps = stepsFor(def.needs).filter((id) => !isComplete(doc.features, id) && !skipped.has(id))
-  guidedTitle = def.label
+  steps = stepsFor(ids).filter((id) => id === again || !isComplete(doc.features, id))
+  if (!steps.length) return refresh()
+  replacing = again
+  guidedTitle = title
   selected = null
-  if (!steps.length) {
-    toast(`${def.label} is already measured`)
-    tool = null
-    openSheet('results')
-  } else {
-    tool = 'guided'
-    openSheet(null)
-  }
+  // The landmark being placed again is drawn heavier until it is replaced.
+  selectedFeature = again
+  tool = 'guided'
+  openSheet(null)
   refresh()
 }
 
 function finishGuided() {
   dropPartials()
   tool = null
-  openSheet('results')
+  replacing = null
+  selectedFeature = null
+  // Back to the measurement the prompts were for, where its value now shows.
+  openSheet(panelKey ? 'guided' : 'results')
   refresh()
 }
 
@@ -291,6 +327,7 @@ function skipStep() {
     pushUndo()
     delete doc.features[cur]
   }
+  if (cur === replacing) replacing = null
   skipped.add(cur)
   if (!currentStep()) finishGuided()
   else refresh()
@@ -323,6 +360,13 @@ function onTap(screen: Pt) {
     const cur = currentStep()
     if (!cur) return
     pushUndo()
+    if (cur === replacing) {
+      // Placed again: the first tap starts it anew, as the user's own landmark.
+      doc.features[cur] = []
+      if (doc.auto) delete doc.auto[cur]
+      replacing = null
+      selectedFeature = null
+    }
     const pts = doc.features[cur] ?? (doc.features[cur] = [])
     pts.push(p)
     if (FEATURE_BY_ID[cur].kind === 'circle') {
@@ -606,6 +650,9 @@ function pointerEnd(e: PointerEvent) {
 }
 cvOverlay.addEventListener('pointerup', pointerEnd)
 cvOverlay.addEventListener('pointercancel', pointerEnd)
+// A tap on the photo can open a panel, or the hint, right under the finger (the last landmark of a guided measurement
+// brings its panel back). The click the browser then makes from the same touch must not land on it and press a button.
+cvOverlay.addEventListener('touchend', (e) => e.preventDefault(), { passive: false })
 
 cvOverlay.addEventListener('wheel', (e) => {
   e.preventDefault()
@@ -650,7 +697,7 @@ function updateHint() {
     const cur = currentStep()
     if (cur) {
       const def = FEATURE_BY_ID[cur]
-      const n = doc.features[cur]?.length ?? 0
+      const n = cur === replacing ? 0 : doc.features[cur]?.length ?? 0
       text = `${guidedTitle} ${steps.indexOf(cur) + 1}/${steps.length} · ${def.name}: ${def.prompts[Math.min(n, def.prompts.length - 1)]}`
       actions.append(button('Skip', skipStep), button('Done', finishGuided))
     }
@@ -716,7 +763,7 @@ function renderResults() {
   const hasLandmarks = FEATURES.some((f) => f.plane === plane && doc.features[f.id])
   body.append(sectionHead(plane === 'sagittal' ? 'Sagittal parameters' : 'Coronal parameters', hasLandmarks ? () => clearGroup(plane) : null))
   if (!shown.length) {
-    body.append(el('div', 'empty-note', 'None yet. Use Guided to place landmarks.'))
+    body.append(el('div', 'empty-note', 'None yet. Tap a measurement below to see the landmarks it needs.'))
   }
   for (const r of shown) {
     const row = el('div', 'res tap' + (r.key === focus ? ' sel' : ''))
@@ -730,41 +777,190 @@ function renderResults() {
     row.append(name, el('div', 'val', formatValue(r)), el('span', ''))
     body.append(row)
   }
+  renderNotYet(body, shown.length > 0)
   // Facing and age only apply to the sagittal parameters.
   $('btn-facing').hidden = plane !== 'sagittal'
   $('age-wrap').hidden = plane !== 'sagittal'
   $('btn-facing').textContent = `Facing ${sag.facing > 0 ? 'right' : 'left'}${facingOverride ? '' : ' (auto)'}`
 }
 
+/** The state of a guided measurement with the current landmarks (shared by the list, the panel and Results). */
+const stateOf = (def: MeasureDef): MeasureState => measureState(def, doc.features, doc.auto, skipped)
+const planeOf = (def: MeasureDef): Plane => FEATURE_BY_ID[def.needs[0]].plane
+
+const STATUS_WORDS: Record<NeedState['status'], string> = {
+  placed: 'placed', guessed: 'guessed, not checked', missing: 'not placed', skipped: 'skipped',
+}
+const needWords = (n: NeedState) => STATUS_WORDS[n.status] + (n.optional && n.status !== 'placed' && n.status !== 'guessed' ? ' · optional' : '')
+
+/**
+ * A landmark's tag, as drawn on the image, in its state: placed (filled), guessed and not checked (outlined, with a question
+ * mark), or not placed (hollow, dashed outline); a skipped one is struck through.
+ */
+function tagEl(n: NeedState): HTMLElement {
+  const f = FEATURE_BY_ID[n.id]
+  const t = el('span', `tag ${n.status} k-${f.kind}`, n.status === 'guessed' ? `${f.tag}?` : f.tag)
+  t.title = `${f.short}: ${needWords(n)}`
+  return t
+}
+
+const chevron = () => el('span', 'chev', '›')
+
+/** One measurement in the Guided list: its name, its value or what it still needs, and its landmarks' tags. */
+function measureRow(def: MeasureDef, values: Map<string, Result>): HTMLElement {
+  const st = stateOf(def)
+  const r = values.get(def.key)
+  const row = button('', () => openPanel(def.key, 'guided'), 'mrow')
+  row.dataset.key = def.key
+  const all = st.needs.every((n) => n.status !== 'missing')
+  const status = def.set
+    ? el('span', st.measured ? 'mrow-val small' : 'mrow-need', st.measured ? (all ? 'all placed' : '') : needsText(st))
+    : r ? el('span', 'mrow-val', formatValue(r)) : el('span', 'mrow-need', needsText(st))
+  const tags = el('span', 'tags')
+  if (def.set) {
+    const have = st.needs.filter((n) => n.status === 'placed' || n.status === 'guessed').length
+    tags.append(el('span', 'count', `${have} of ${st.needs.length} landmarks placed`))
+  } else {
+    for (const n of st.needs) tags.append(tagEl(n))
+  }
+  row.append(el('span', 'mrow-name', def.label), status, tags, chevron())
+  row.setAttribute('aria-label', `${def.name}: ${r ? formatValue(r) : status.textContent || tags.textContent}`)
+  return row
+}
+
 function renderGuided() {
+  const def = panelKey ? MEASURE_BY_KEY[panelKey] : undefined
+  if (panelKey && (!def || planeOf(def) !== plane)) panelKey = null
+  $('guided-list').hidden = !!panelKey
+  $('guided-panel').hidden = !panelKey
+  $('plane-tabs').hidden = !!panelKey
+  if (panelKey && def) return renderPanel(def)
   const body = $('guided-body')
   body.replaceChildren()
-  const values = new Map(sagittal().results.map((r) => [r.key, formatValue(r)]))
+  const values = new Map(sagittal().results.map((r) => [r.key, r]))
   for (const group of MEASURE_GROUPS.filter((g) => g.plane === plane)) {
     body.append(el('h3', '', group.title))
-    const chips = el('div', 'chips')
-    for (const item of group.items) {
-      const b = button(item.label, () => startGuided(item), 'chip')
-      const v = values.get(item.key)
-      if (v) {
-        b.classList.add('done')
-        b.append(el('small', '', v))
-      }
-      chips.append(b)
-    }
-    body.append(chips)
+    const list = el('div', 'mlist')
+    for (const item of group.items) list.append(measureRow(item, values))
+    body.append(list)
   }
   $('guided-note').textContent =
     plane === 'sagittal'
-      ? 'You are only asked for landmarks that measurement needs and that are not placed yet. On each endplate tap the anterior corner first.'
+      ? 'On each endplate tap the anterior corner first. Landmarks already placed are reused.'
       : 'Tap the two ends of each line in either order. Level the photo first (Adjust): pelvic obliquity and T1 tilt are measured against horizontal.'
+}
+
+/** A measurement's own panel: its value, the landmarks it needs with their state, and a way to place what is missing. */
+function renderPanel(def: MeasureDef) {
+  const box = $('guided-panel')
+  box.replaceChildren()
+  const st = stateOf(def)
+  const r = sagittal().results.find((x) => x.key === def.key)
+  const head = el('div', 'p-head')
+  const back = button('‹', closePanel, 'back')
+  back.title = panelFrom === 'results' ? 'Back to Results' : 'Back to all measurements'
+  back.setAttribute('aria-label', back.title)
+  const title = el('div', 'p-title')
+  title.append(el('h2', '', def.name))
+  if (def.label !== def.name) title.append(el('span', 'p-key', def.label))
+  head.append(back, title)
+  box.append(head)
+  if (r) {
+    const v = el('div', 'p-val', formatValue(r))
+    if (r.note) v.append(el('small', '', r.note))
+    box.append(v)
+  } else {
+    box.append(el('p', 'p-status', def.set && st.measured ? 'Every landmark it needs is placed.' : `Not measured yet: it ${needsText(st)}.`))
+  }
+  if (!st.measured) {
+    const n = st.toPlace.length
+    const label = n === 1 ? 'Place the missing landmark' : `Place the ${n} missing landmarks`
+    box.append(button(label, () => placeLandmarks(st.toPlace, def.label), 'primary wide main'))
+  } else if (!def.set && r) {
+    const on = focus === def.key
+    box.append(button(on ? 'Show all measurements' : 'Show on the image', () => {
+      focus = on ? null : def.key
+      selected = null
+      selectedFeature = null
+      refresh()
+    }, 'wide main' + (on ? ' on' : '')))
+  }
+  box.append(el('h3', '', 'Landmarks it needs'))
+  const list = el('div', 'lms')
+  for (const n of st.needs) {
+    const f = FEATURE_BY_ID[n.id]
+    const present = n.status === 'placed' || n.status === 'guessed'
+    const line = el('div', 'lm' + (present ? ' stack' : '') + (selectedFeature === n.id ? ' sel' : ''))
+    line.dataset.id = n.id
+    const info = el('div', 'lm-info')
+    const name = el('div', 'lm-name')
+    name.append(tagEl(n), el('span', '', f.short))
+    info.append(name, el('div', `lm-state ${n.status}`, needWords(n)))
+    const acts = el('div', 'lm-acts')
+    if (present) {
+      acts.append(button('Show', () => showFeature(n.id)))
+      if (n.status === 'guessed') acts.append(button('Keep', () => keepFeature(n.id)))
+      acts.append(button('Place again', () => placeLandmarks([n.id], def.label, n.id)))
+    } else {
+      acts.append(button('Place', () => placeLandmarks([n.id], def.label)))
+    }
+    line.append(info, acts)
+    list.append(line)
+  }
+  box.append(list)
+  if (st.needs.some((n) => n.status === 'guessed')) {
+    box.append(el('p', 'fine', 'A question mark means the automatic guess placed it and nobody has checked it: Show it, then drag it into place, Keep it, or Place it again.'))
+  }
+}
+
+function openPanel(key: string, from: 'guided' | 'results') {
+  if (sheet === 'guided' && !panelKey) listScroll = $('sheet').scrollTop
+  panelKey = key
+  panelFrom = from
+  openSheet('guided')
+  refresh()
+  $('sheet').scrollTop = 0
+}
+
+function closePanel() {
+  const from = panelFrom
+  panelKey = null
+  openSheet(from)
+  refresh()
+  $('sheet').scrollTop = from === 'guided' ? listScroll : 0
+}
+
+/** Results: the current plane's measurements that have no value yet, each with what it needs; one opens its panel. */
+function renderNotYet(body: HTMLElement, anyShown: boolean) {
+  const left = MEASURE_GROUPS.filter((g) => g.plane === plane).flatMap((g) => g.items)
+    .filter((d) => !d.set).map(stateOf).filter((x) => !x.measured)
+  if (!left.length) return
+  const open = notYetOpen ?? !anyShown
+  const head = button('', () => {
+    notYetOpen = !open
+    refresh()
+  }, 'notyet-head')
+  head.setAttribute('aria-expanded', String(open))
+  head.append(el('span', '', `Not measured yet (${left.length})`), el('span', 'chev' + (open ? ' open' : ''), '›'))
+  body.append(head)
+  if (!open) return
+  const list = el('div', 'mlist notyet')
+  for (const x of left) {
+    const row = button('', () => openPanel(x.def.key, 'results'), 'mrow compact')
+    row.dataset.key = x.def.key
+    row.append(el('span', 'mrow-name', x.def.label), el('span', 'mrow-need', needsText(x)), chevron())
+    row.setAttribute('aria-label', `${x.def.name}: ${needsText(x)}`)
+    list.append(row)
+  }
+  body.append(list)
 }
 
 function openSheet(id: SheetId | null) {
   sheet = id
   $('sheet').hidden = !id
   for (const s of ['adjust', 'guided', 'results'] as const) $(`sheet-${s}`).hidden = s !== id
-  $('plane-tabs').hidden = id !== 'guided' && id !== 'results'
+  // A measurement's own panel belongs to one plane, so the switch is shown with the list only.
+  $('plane-tabs').hidden = !(id === 'results' || (id === 'guided' && !panelKey))
 }
 
 function toggleSheet(id: SheetId) {
@@ -846,6 +1042,8 @@ async function openPhoto(file: Blob) {
   age = undefined
   $<HTMLInputElement>('in-age').value = ''
   steps = []
+  replacing = null
+  panelKey = null
   skipped.clear()
   openSheet(null)
   syncAdjustInputs()
@@ -1072,6 +1270,8 @@ document.querySelectorAll<HTMLElement>('#tools [data-tool]').forEach((b) => {
       openSheet(null)
       refresh()
     } else {
+      // The bottom bar always opens the list; a measurement's panel is reached from it.
+      if (sheet !== 'guided') panelKey = null
       toggleSheet('guided')
     }
   })

@@ -22,31 +22,33 @@ export interface FeatureDef {
   tag: string
   /** Name used in prompts. */
   name: string
+  /** Name in the Guided lists, read beside the measurement it belongs to ("needs T4 body"). */
+  short: string
   /** One prompt per tap. */
   prompts: string[]
 }
 
 const line = (id: FeatureId, tag: string, name: string): FeatureDef => ({
-  id, plane: 'sagittal', kind: 'line', tag, name,
+  id, plane: 'sagittal', kind: 'line', tag, name, short: name,
   prompts: ['tap the anterior corner', 'now tap the posterior corner'],
 })
 const point = (id: FeatureId, tag: string, name: string): FeatureDef => ({
-  id, plane: 'sagittal', kind: 'point', tag, name, prompts: ['tap the centre of the vertebral body'],
+  id, plane: 'sagittal', kind: 'point', tag, name, short: name, prompts: ['tap the centre of the vertebral body'],
 })
 /** Coronal lines have no anterior/posterior end, so tap order never matters. */
-const cline = (id: FeatureId, tag: string, name: string, prompts = ['tap one end', 'now tap the other end']): FeatureDef => ({
-  id, plane: 'coronal', kind: 'line', tag, name, prompts,
+const cline = (id: FeatureId, tag: string, name: string, short = name, prompts = ['tap one end', 'now tap the other end']): FeatureDef => ({
+  id, plane: 'coronal', kind: 'line', tag, name, short, prompts,
 })
 const curve = (upper: FeatureId, lower: FeatureId, tag: string, name: string): FeatureDef[] => [
-  cline(upper, tag, `${name} curve, top endplate of the upper end vertebra`),
-  cline(lower, tag, `${name} curve, bottom endplate of the lower end vertebra`),
+  cline(upper, tag, `${name} curve, top endplate of the upper end vertebra`, 'Top endplate, upper end vertebra'),
+  cline(lower, tag, `${name} curve, bottom endplate of the lower end vertebra`, 'Bottom endplate, lower end vertebra'),
 ]
 
 /** Prompting order: sagittal landmarks caudal to cranial, then coronal. */
 export const FEATURES: FeatureDef[] = [
-  { id: 'fh1', plane: 'sagittal', kind: 'circle', tag: 'FH', name: 'Femoral head',
+  { id: 'fh1', plane: 'sagittal', kind: 'circle', tag: 'FH', name: 'Femoral head', short: 'Femoral head',
     prompts: ['tap its centre, then drag the circle to fit'] },
-  { id: 'fh2', plane: 'sagittal', kind: 'circle', tag: 'FH', name: 'Second femoral head',
+  { id: 'fh2', plane: 'sagittal', kind: 'circle', tag: 'FH', name: 'Second femoral head', short: 'Second femoral head',
     prompts: ['tap its centre, or skip if the heads overlap'] },
   line('s1', 'S1', 'S1 superior endplate'),
   line('l4', 'L4', 'L4 superior endplate'),
@@ -60,13 +62,13 @@ export const FEATURES: FeatureDef[] = [
   line('c7', 'C7', 'C7 inferior endplate'),
   point('c7c', 'C7', 'C7 body'),
   line('c2', 'C2', 'C2 inferior endplate'),
-  cline('po', 'PO', 'Pelvis', ['tap the top of one iliac crest (or sacral ala)', 'now tap the same point on the other side']),
+  cline('po', 'PO', 'Pelvis', 'Pelvis (iliac crests)', ['tap the top of one iliac crest (or sacral ala)', 'now tap the same point on the other side']),
   cline('ct1', 'T1', 'T1 upper endplate'),
   ...curve('ptU', 'ptL', 'PT', 'Proximal thoracic'),
   ...curve('mtU', 'mtL', 'MT', 'Main thoracic'),
   ...curve('tlU', 'tlL', 'TL/L', 'Thoracolumbar/lumbar'),
-  cline('frU', 'Frac', 'Fractional curve, top endplate of L4 (or L3)'),
-  cline('frL', 'Frac', 'Fractional curve, S1 endplate'),
+  cline('frU', 'Frac', 'Fractional curve, top endplate of L4 (or L3)', 'Top endplate of L4 (or L3)'),
+  cline('frL', 'Frac', 'Fractional curve, S1 endplate', 'S1 endplate'),
 ]
 
 export const FEATURE_BY_ID = Object.fromEntries(FEATURES.map((f) => [f.id, f])) as Record<FeatureId, FeatureDef>
@@ -79,52 +81,58 @@ export const pointsStored = (kind: FeatureKind): number => (kind === 'point' ? 1
 export interface MeasureDef {
   key: string
   label: string
+  /** Full name, as in Results once measured. */
+  name: string
   needs: FeatureId[]
+  /** A set of landmarks for several measurements at once, with no value of its own. */
+  set?: boolean
 }
 
 const PELVIS: FeatureId[] = ['fh1', 'fh2', 's1']
 
 export const MEASURE_GROUPS: { plane: Plane; title: string; items: MeasureDef[] }[] = [
   { plane: 'sagittal', title: 'Pelvis', items: [
-    { key: 'PI', label: 'PI', needs: PELVIS },
-    { key: 'PT', label: 'PT', needs: PELVIS },
-    { key: 'SS', label: 'SS', needs: ['s1'] },
+    { key: 'PI', label: 'PI', name: 'Pelvic incidence', needs: PELVIS },
+    { key: 'PT', label: 'PT', name: 'Pelvic tilt', needs: PELVIS },
+    { key: 'SS', label: 'SS', name: 'Sacral slope', needs: ['s1'] },
   ] },
   { plane: 'sagittal', title: 'Lumbar', items: [
-    { key: 'LL', label: 'LL', needs: ['s1', 'l1'] },
-    { key: 'L4S1', label: 'L4–S1', needs: ['s1', 'l4'] },
-    { key: 'PI-LL', label: 'PI−LL', needs: [...PELVIS, 'l1'] },
+    { key: 'LL', label: 'LL', name: 'Lumbar lordosis L1–S1', needs: ['s1', 'l1'] },
+    { key: 'L4S1', label: 'L4–S1', name: 'L4–S1 lordosis', needs: ['s1', 'l4'] },
+    { key: 'PI-LL', label: 'PI−LL', name: 'PI − LL mismatch', needs: [...PELVIS, 'l1'] },
   ] },
-  { plane: 'sagittal', title: 'Thoracic', items: [{ key: 'TK', label: 'TK T4–T12', needs: ['t12', 't4'] }] },
+  { plane: 'sagittal', title: 'Thoracic', items: [{ key: 'TK', label: 'TK T4–T12', name: 'Thoracic kyphosis T4–T12', needs: ['t12', 't4'] }] },
   { plane: 'sagittal', title: 'Global', items: [
-    { key: 'L1PA', label: 'L1PA', needs: [...PELVIS, 'l1c'] },
-    { key: 'T4PA', label: 'T4PA', needs: [...PELVIS, 't4c'] },
-    { key: 'TPA', label: 'TPA', needs: [...PELVIS, 't1c'] },
-    { key: 'GT', label: 'Global tilt', needs: [...PELVIS, 'c7c'] },
+    { key: 'L1PA', label: 'L1PA', name: 'L1 pelvic angle', needs: [...PELVIS, 'l1c'] },
+    { key: 'T4PA', label: 'T4PA', name: 'T4 pelvic angle', needs: [...PELVIS, 't4c'] },
+    { key: 'TPA', label: 'TPA', name: 'T1 pelvic angle', needs: [...PELVIS, 't1c'] },
+    { key: 'GT', label: 'Global tilt', name: 'Global tilt', needs: [...PELVIS, 'c7c'] },
   ] },
   { plane: 'sagittal', title: 'Cervical', items: [
-    { key: 'T1S', label: 'T1 slope', needs: ['t1'] },
-    { key: 'CL', label: 'C2–C7', needs: ['c7', 'c2'] },
-    { key: 'T1S-CL', label: 'T1S−CL', needs: ['t1', 'c7', 'c2'] },
+    { key: 'T1S', label: 'T1 slope', name: 'T1 slope', needs: ['t1'] },
+    { key: 'CL', label: 'C2–C7', name: 'C2–C7 lordosis', needs: ['c7', 'c2'] },
+    { key: 'T1S-CL', label: 'T1S−CL', name: 'T1 slope − CL', needs: ['t1', 'c7', 'c2'] },
   ] },
   { plane: 'sagittal', title: 'Several at once', items: [
-    { key: 'SET-LP', label: 'Pelvis + lumbar', needs: [...PELVIS, 'l4', 'l1'] },
-    { key: 'SET-ALL', label: 'Everything', needs: FEATURES.filter((f) => f.plane === 'sagittal').map((f) => f.id) },
+    { key: 'SET-LP', label: 'Pelvis + lumbar', name: 'Pelvis and lumbar landmarks', needs: [...PELVIS, 'l4', 'l1'], set: true },
+    { key: 'SET-ALL', label: 'Everything', name: 'Every sagittal landmark', needs: FEATURES.filter((f) => f.plane === 'sagittal').map((f) => f.id), set: true },
   ] },
   { plane: 'coronal', title: 'Curves (Cobb)', items: [
-    { key: 'Prox T Cobb', label: 'Proximal thoracic', needs: ['ptU', 'ptL'] },
-    { key: 'Main T Cobb', label: 'Main thoracic', needs: ['mtU', 'mtL'] },
-    { key: 'TL/L Cobb', label: 'TL / lumbar', needs: ['tlU', 'tlL'] },
-    { key: 'Fractional', label: 'Fractional', needs: ['frU', 'frL'] },
+    { key: 'Prox T Cobb', label: 'Proximal thoracic', name: 'Proximal thoracic Cobb', needs: ['ptU', 'ptL'] },
+    { key: 'Main T Cobb', label: 'Main thoracic', name: 'Main thoracic Cobb', needs: ['mtU', 'mtL'] },
+    { key: 'TL/L Cobb', label: 'TL / lumbar', name: 'Thoracolumbar/lumbar Cobb', needs: ['tlU', 'tlL'] },
+    { key: 'Fractional', label: 'Fractional', name: 'Lumbosacral fractional curve', needs: ['frU', 'frL'] },
   ] },
   { plane: 'coronal', title: 'Pelvis and shoulders', items: [
-    { key: 'PO', label: 'Pelvic obliquity', needs: ['po'] },
-    { key: 'T1 tilt', label: 'T1 tilt', needs: ['ct1'] },
+    { key: 'PO', label: 'Pelvic obliquity', name: 'Pelvic obliquity', needs: ['po'] },
+    { key: 'T1 tilt', label: 'T1 tilt', name: 'T1 tilt', needs: ['ct1'] },
   ] },
   { plane: 'coronal', title: 'Several at once', items: [
-    { key: 'SET-COR', label: 'All coronal', needs: FEATURES.filter((f) => f.plane === 'coronal').map((f) => f.id) },
+    { key: 'SET-COR', label: 'All coronal', name: 'Every coronal landmark', needs: FEATURES.filter((f) => f.plane === 'coronal').map((f) => f.id), set: true },
   ] },
 ]
+
+export const MEASURE_BY_KEY = Object.fromEntries(MEASURE_GROUPS.flatMap((g) => g.items.map((m) => [m.key, m]))) as Record<string, MeasureDef>
 
 /** The given landmarks in prompting order (caudal to cranial), without duplicates. */
 export function stepsFor(needs: FeatureId[]): FeatureId[] {
@@ -137,6 +145,70 @@ export type Features = Partial<Record<FeatureId, Pt[]>>
 export function isComplete(features: Features, id: FeatureId): boolean {
   const pts = features[id]
   return !!pts && pts.length >= pointsStored(FEATURE_BY_ID[id].kind)
+}
+
+/**
+ * The second femoral head is optional: with one head the hip axis is that head's centre. It is asked for together with
+ * the first head, and otherwise only when the user asks for it.
+ */
+export const isOptional = (id: FeatureId): boolean => id === 'fh2'
+
+/**
+ * Where a landmark a measurement needs stands: placed by someone (or kept), placed by the automatic guess and not checked
+ * yet, not placed, or (the optional second femoral head only) skipped because the heads overlap.
+ */
+export type NeedStatus = 'placed' | 'guessed' | 'missing' | 'skipped'
+
+export interface NeedState {
+  id: FeatureId
+  status: NeedStatus
+  optional: boolean
+}
+
+export interface MeasureState {
+  def: MeasureDef
+  /** Every landmark it needs, in prompting order. */
+  needs: NeedState[]
+  /** Landmarks the guided prompts ask for, in prompting order: those not placed, the second head only with the first. */
+  toPlace: FeatureId[]
+  /** Landmarks it cannot be measured without. */
+  missing: FeatureId[]
+  /** Nothing it cannot do without is missing, so it has a value (or, for a set, every landmark is there). */
+  measured: boolean
+}
+
+/**
+ * For a guided measurement and the current landmarks: each landmark it needs with its status, what the prompts would ask
+ * for, and whether it is measured. `auto` holds the landmarks an automatic guess placed and nobody has checked; `skipped`
+ * the landmarks skipped in the guided prompts (only a skipped second femoral head counts, and only next to a first one).
+ */
+export function measureState(
+  def: MeasureDef,
+  features: Features,
+  auto: Partial<Record<FeatureId, number>> | undefined,
+  skipped: ReadonlySet<FeatureId> = new Set(),
+): MeasureState {
+  const fh1 = isComplete(features, 'fh1')
+  const needs: NeedState[] = stepsFor(def.needs).map((id) => {
+    const optional = isOptional(id)
+    const status: NeedStatus = isComplete(features, id)
+      ? auto?.[id] !== undefined ? 'guessed' : 'placed'
+      : optional && fh1 && skipped.has(id) ? 'skipped' : 'missing'
+    return { id, status, optional }
+  })
+  const absent = needs.filter((n) => n.status === 'missing')
+  const toPlace = absent.filter((n) => !n.optional || !fh1).map((n) => n.id)
+  const missing = absent.filter((n) => !n.optional).map((n) => n.id)
+  return { def, needs, toPlace, missing, measured: missing.length === 0 }
+}
+
+/** What a measurement still needs, in words: "needs T4 body", "needs 3 landmarks", or "" when it is measured. */
+export function needsText(s: MeasureState): string {
+  if (s.measured) return ''
+  if (s.toPlace.length !== 1) return `needs ${s.toPlace.length} landmarks`
+  const name = FEATURE_BY_ID[s.toPlace[0]].short
+  // "Femoral head" reads "needs femoral head"; "T4 body" keeps its capital.
+  return `needs ${/^[A-Z][a-z]/.test(name) ? name[0].toLowerCase() + name.slice(1) : name}`
 }
 
 export interface Result {

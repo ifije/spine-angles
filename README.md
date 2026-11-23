@@ -36,7 +36,26 @@ Everything happens on your device. Photos are not uploaded, and no photo is kept
 
 ### Guided measurements
 
-Tap **Guided**, choose **Sagittal** or **Coronal**, then tap the measurement you want. The app asks only for the landmarks that measurement needs, and reuses any you have already placed.
+Tap **Guided** and choose **Sagittal** or **Coronal**. Each measurement is listed with its value once it can be worked out, and with the landmarks it uses as small tags, the same tags that are drawn on the image (FH, S1, L4, L1, T4 …):
+
+- a filled tag is placed;
+- a tag with a question mark (`S1?`) was placed by the automatic guess and nobody has checked it yet;
+- a hollow, dashed tag is not placed yet.
+
+A measurement that cannot be worked out yet says what it is missing, for example "needs T4 body" or "needs 3 landmarks".
+
+Tap a measurement to open its page. It lists every landmark the measurement needs, says whether each is placed, guessed or not placed, and offers what you can do with it:
+
+- **Place** a landmark that is not there. The page closes, the bar at the bottom of the image asks for each tap, and then the page comes back with the value.
+- **Place the missing landmarks** does this for all of them, in the usual order (from the hips upwards). **Skip** a landmark you cannot see; **Done** stops early. **Undo** takes back one tap at a time.
+- **Show** moves the image so the landmark is in view and selects it.
+- **Keep** accepts a guessed landmark where it is; its question mark goes.
+- **Place again** asks for a landmark anew; the old one stays until your first tap.
+- Once the measurement has a value, **Show on the image** draws only that one.
+
+Landmarks are shared: one you place for PI is used by every measurement that needs it. The second femoral head is optional; with one head, its centre is used. If the heads overlap, tap **Skip** when the app asks for the second one.
+
+In **Results**, **Not measured yet** lists the measurements of the current view that have no value yet and what each one needs. Tap one to open its page.
 
 - **Sagittal:** PI, PT, SS, LL, L4–S1, PI−LL, thoracic kyphosis (T4–T12), L1 pelvic angle, T4 pelvic angle, T1 pelvic angle, global tilt, T1 slope, C2–C7 lordosis, T1S−CL.
 - **Coronal:** Cobb for the proximal thoracic, main thoracic, thoracolumbar/lumbar and lumbosacral fractional curves; pelvic obliquity; T1 tilt.

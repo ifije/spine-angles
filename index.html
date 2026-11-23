@@ -79,12 +79,20 @@
         </div>
 
         <div id="sheet-guided" hidden>
-          <h2>Tap a measurement to be guided through it</h2>
-          <div id="guided-body"></div>
-          <p class="fine" id="guided-note"></p>
-          <div class="row">
-            <button id="btn-guided-clear">Clear landmarks</button>
+          <div id="guided-list">
+            <h2>Tap a measurement to see what it needs</h2>
+            <p class="legend">
+              <span><span class="tag placed k-line">S1</span> placed</span>
+              <span><span class="tag guessed k-line">S1?</span> guessed, not checked</span>
+              <span><span class="tag missing k-line">S1</span> not placed</span>
+            </p>
+            <div id="guided-body"></div>
+            <p class="fine" id="guided-note"></p>
+            <div class="row">
+              <button id="btn-guided-clear">Clear landmarks</button>
+            </div>
           </div>
+          <div id="guided-panel" hidden></div>
         </div>
 
         <div id="sheet-results" hidden>

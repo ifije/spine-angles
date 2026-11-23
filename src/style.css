@@ -11,6 +11,11 @@
   --accent: #ffd54a;
   --accent-ink: #1a1400;
   --danger: #ff6b6b;
+  --ok: #7ee787;
+  /* Landmark colours, as drawn on the image: endplates, femoral heads, vertebral bodies */
+  --k-line: #ffd54a;
+  --k-circle: #7ee787;
+  --k-point: #ff9f1c;
   color-scheme: dark;
 }
 
@@ -143,7 +148,7 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 }
 #hint-text { flex: 1; font-size: 14px; }
 #hint-actions { display: flex; gap: 6px; flex-shrink: 0; }
-#hint-actions button { min-height: 34px; }
+#hint-actions button { min-height: 44px; }
 
 #toast {
   position: absolute;
@@ -186,14 +191,14 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 .res { display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; column-gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .res .name small { display: block; color: var(--muted); font-size: 12.5px; }
 .res .val { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.res button { min-height: 30px; padding: 0 9px; }
+.res button { min-height: 44px; min-width: 44px; padding: 0 9px; }
 .res.sel .name { color: var(--accent); }
 .empty-note { color: var(--muted); padding: 4px 0 8px; }
 
 .age { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .age input {
   width: 64px;
-  min-height: 38px;
+  min-height: 44px;
   font: inherit;
   /* 16px stops iOS zooming the page when the field is focused */
   font-size: 16px;
@@ -243,27 +248,125 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 
 /* Swipe-down handle on the bottom panels */
 #sheet { will-change: transform; }
-#sheet-grab { display: flex; justify-content: center; align-items: center; height: 26px; margin: -12px 0 2px; cursor: pointer; }
+#sheet-grab { display: flex; justify-content: center; align-items: center; height: 44px; margin: -12px 0 -4px; cursor: pointer; }
 #sheet-grab span { width: 40px; height: 5px; border-radius: 3px; background: #4a525e; }
 #tools { position: relative; z-index: 2; }
 
-/* Guided measurement picker */
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { min-height: 42px; padding: 0 14px; font-weight: 600; }
-.chip small { margin-left: 8px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-.chip.done { border-color: #4a6b52; }
-.chip.done small { color: #7ee787; }
+/* Everything tappable in the bottom panels is at least 44 px tall. */
+#sheet button { min-height: 44px; }
 
 /* Sagittal / coronal switch at the top of the Guided and Results panels */
 #plane-tabs { display: flex; gap: 0; margin: 0 0 12px; padding: 3px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; }
-#plane-tabs button { flex: 1; min-height: 34px; background: transparent; border-color: transparent; color: var(--muted); font-weight: 600; }
+#plane-tabs button { flex: 1; min-height: 44px; background: transparent; border-color: transparent; color: var(--muted); font-weight: 600; }
 #plane-tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
-.res.tap { cursor: pointer; }
+.res.tap { cursor: pointer; min-height: 44px; align-content: center; }
 .res.tap.sel .val { color: var(--accent); }
 
 /* Results section heading with a Clear button */
 .sec { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 4px; }
 .sec:first-child { margin-top: 0; }
 #sheet .sec h3 { margin: 0; }
-.sec button { min-height: 28px; padding: 0 10px; font-size: 13px; color: var(--muted); }
+.sec button { padding: 0 12px; font-size: 13px; color: var(--muted); }
+
+/* ---- Guided: one row per measurement, its landmarks as tags ---- */
+
+/* A landmark's tag in its state, told apart by more than colour: placed is filled, guessed (not checked) is outlined with a
+   question mark, not placed is hollow and dashed, skipped is struck through. */
+.tag {
+  --k: var(--k-line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 30px;
+  height: 21px;
+  padding: 0 6px;
+  border: 1.5px solid var(--k);
+  border-radius: 6px;
+  background: var(--k);
+  color: #14110a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+.tag.k-circle { --k: var(--k-circle); }
+.tag.k-point { --k: var(--k-point); }
+.tag.guessed { background: rgba(255, 255, 255, 0.06); color: var(--k); }
+.tag.missing, .tag.skipped { background: transparent; border: 1.5px dashed #6b7480; color: var(--muted); }
+.tag.skipped { text-decoration: line-through; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 2px; color: var(--muted); font-size: 12.5px; }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+
+.mlist { display: flex; flex-direction: column; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+#sheet .mrow {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 5px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 34px 9px 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+#sheet .mrow:first-child { border-top: 0; }
+.mrow-name { font-weight: 650; overflow-wrap: anywhere; }
+.mrow-val { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ok); text-align: right; }
+.mrow-val.small { font-size: 13.5px; font-weight: 500; }
+.mrow-need { font-size: 13.5px; color: var(--accent); text-align: right; }
+.mrow .tags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.mrow .count { font-size: 12.5px; color: var(--muted); }
+.chev { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 24px; line-height: 1; color: var(--muted); }
+#sheet .mrow.compact { min-height: 48px; align-items: center; }
+
+/* A measurement's own panel */
+.p-head { display: flex; align-items: center; gap: 12px; }
+#sheet .p-head .back { flex-shrink: 0; width: 44px; padding: 0; font-size: 28px; line-height: 1; color: var(--accent); }
+.p-title { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; min-width: 0; }
+#sheet .p-head h2 { margin: 0; font-size: 19px; }
+.p-key { color: var(--muted); font-size: 13.5px; font-weight: 600; }
+.p-val { margin: 4px 0 0; font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ok); }
+.p-val small { display: block; margin-top: 1px; font-size: 13px; font-weight: 400; color: var(--muted); }
+.p-status { margin: 6px 0 0; color: var(--accent); }
+#sheet button.wide { width: 100%; }
+#sheet button.main { min-height: 50px; margin-top: 12px; font-weight: 600; }
+#sheet button.main.on { background: var(--panel-2); }
+#sheet #guided-panel h3 { margin-top: 16px; }
+
+.lm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.lm:last-child { border-bottom: 0; }
+.lm-info { flex: 1 1 150px; min-width: 0; }
+.lm-name { display: flex; align-items: baseline; gap: 8px; font-weight: 600; }
+.lm.sel .lm-name { color: var(--accent); }
+.lm-state { margin-top: 3px; font-size: 13px; color: var(--muted); }
+.lm-state.missing { color: var(--accent); }
+.lm-acts { display: flex; gap: 6px; margin-left: auto; }
+/* A landmark that is there: its name runs above, its state sits beside its buttons. */
+.lm.stack { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'name name' 'state acts'; align-items: center; row-gap: 4px; }
+.lm.stack .lm-info { display: contents; }
+.lm.stack .lm-name { grid-area: name; }
+.lm.stack .lm-state { grid-area: state; margin: 0; }
+.lm.stack .lm-acts { grid-area: acts; }
+#sheet .lm-acts button { padding: 0 13px; }
+
+/* Results: what is not measured yet */
+#sheet .notyet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 14px 0 6px;
+  padding: 0 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.notyet-head .chev { position: static; transform: none; transition: transform 0.15s; }
+.notyet-head .chev.open { transform: rotate(90deg); }
