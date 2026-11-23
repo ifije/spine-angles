@@ -42,6 +42,17 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [ ] Reopen a saved photo and record to continue or correct it
 - [ ] Option to save only the on-screen region, to keep names out of the saved photo
 
+## Automatic guess (added 2026-11-20; on the device 2026-11-23)
+- [x] Guess from a detector service the user runs: Auto button, question marks, Keep, Delete, Auto again, `"annotator": "auto"` in Save labels
+- [x] On-device detector: WebGPU engine and landmark path in `src/detector/`, copied by `scripts/sync_detector.py`
+- [x] Detector file format; "Add detector file" / "Remove detector file", kept on the device
+- [x] Test build that finds a detector file beside the app (`SPINE_ANGLES_TEST_BUILD=1`), no offline mode
+- [x] One plain line when the browser has no WebGPU
+- [ ] Try the on-device guess on a real iPhone in Safari, installed and not (does Safari offer WebGPU there?)
+- [ ] A way to guess without WebGPU (the processor), if Safari needs it
+- [ ] Decide how the detector file reaches users, and whether the detector's code is published
+- [ ] T4 pelvic angle as a guided measurement; check L1 pelvic angle from the guess against hand-placed landmarks
+
 ## Phase 3 — Install and deploy
 - [x] Manifest, icons, service worker with versioned cache
 - [x] Deploy to GitHub Pages (auto-deploys on push to `main`)

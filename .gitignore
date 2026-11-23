@@ -4,3 +4,6 @@ dev-dist/
 coverage/
 *.log
 .DS_Store
+# A detector file holds a trained network: never part of this repository.
+public/detector/
+spine-detector*

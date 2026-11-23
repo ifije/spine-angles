@@ -16,7 +16,7 @@ It also works in any modern browser on Android, tablets and desktop.
 
 ## Privacy
 
-Everything happens on your device. Photos are not uploaded, and nothing is saved after you close the app. Sharing an image is the only way anything leaves the phone, and you choose where it goes.
+Everything happens on your device. Photos are not uploaded, and no photo is kept after you close the app; the only file the app keeps is a detector file, if you add one for the automatic guess. Sharing an image is the only way anything leaves the phone, and you choose where it goes. (The one exception is a detector service you run yourself for the automatic guess: then each photo you open is sent to it, as described below.)
 
 ## Taking a good photo
 
@@ -70,16 +70,24 @@ Each guided result is drawn on the image where it is measured. Tap a result in *
 
 Unlike Share, this saves the **whole photo**, including any name or date visible on it. Crop the photo before loading it if that matters. Nothing is uploaded; the files go wherever you send them from the share sheet.
 
-### Automatic guess (optional, needs your own detector)
+### Automatic guess (optional, needs a detector)
 
-The app can ask a landmark detector that **you run yourself** for a first guess, then leave the correcting to you. It is off unless the app finds such a detector, so for everyone else nothing changes and nothing is uploaded.
+The app can find the main landmarks itself and leave the correcting to you. It is off unless the app has a detector, so for everyone else nothing changes and nothing is uploaded.
 
-- With a detector present, an **Auto** button appears and each photo you open is sent to it. The femoral heads, S1, L4, L1 and the L1 body come back as ordinary landmarks, each tagged with a question mark (`S1?`) to show that nobody has checked it.
-- Drag any of them into place, or tap one and choose **Delete** if it is wrong (a femoral head drawn where there is none, say) or **Keep** if it is right. Moving or keeping a landmark removes its question mark. **Undo** takes back the whole guess.
+**What it does.** With a detector, an **Auto** button appears and each photo you open gets a first guess: the femoral heads, the S1 endplate, the L4 and L1 endplates and the L1 body, placed as ordinary landmarks. PI, PT, SS, LL, L4–S1, PI−LL and the L1 pelvic angle are shown from them at once. Each guessed landmark carries a question mark (`S1?`) to show that nobody has checked it.
+
+- Drag any of them into place, or tap one and choose **Delete** if it is wrong (a femoral head drawn where there is none, say) or **Keep** if it is right. Moving or keeping a landmark removes its question mark, and the angles follow. **Undo** takes back the whole guess.
 - **Auto** again replaces only the guesses you have not touched.
 - In **Save labels**, a landmark left exactly where the guess put it is recorded with `"annotator": "auto"`; everything you placed, moved or kept has `null`.
+- A guess is a starting point, not a measurement: check every landmark before you use a value.
 
-The app looks for a detector at the address it was loaded from, or at `?detector=http://host:port/` added to the page address (remembered; `?detector=` forgets it). A detector is any service that answers `GET health` with `{"service": "spine-guess"}` and `POST guess` (the photo as JPEG) with a record in the Save labels format. The photo is sent to that address only.
+**Where the detector comes from.** The app looks, in this order:
+
+1. **A detector file you added.** On the start screen, tap **Add detector file** and choose the file. The app checks it and keeps it on this device; **Remove detector file** in the same place deletes it again. The guess is then worked out on the phone itself, by its graphics chip, about a second after the photo opens, and the photo is sent nowhere. The detector file holds a landmark network that was trained separately; it is not included with the app.
+2. **A detector file beside the app**, in a test build made for that (see For developers). It works the same way.
+3. **A detector service you run yourself.** The app looks for one at the address it was loaded from, or at `?detector=http://host:port/` added to the page address (remembered; `?detector=` forgets it). A detector service is any service that answers `GET health` with `{"service": "spine-guess"}` and `POST guess` (the photo as JPEG) with a record in the Save labels format. Each photo you open is sent to that address, and only there.
+
+The detector file needs **WebGPU**, a graphics feature of recent browsers. Where the browser does not offer it, the start screen says so in one line and no guess is made; everything else works as usual.
 
 ## Reference values
 
@@ -96,6 +104,10 @@ npm run clean    # remove build output and caches
 ```
 
 Vite and TypeScript, no backend. Pushing to `main` runs the tests and deploys to GitHub Pages. `python3 scripts/make_icons.py` regenerates the app icons. Design notes are in [PLAN.md](PLAN.md); open work is in [TODO.md](TODO.md).
+
+The on-device detector's code (a small WebGPU engine and the landmark path that reads the network's answers) lives in `src/detector/`. It is written and tested in the detector's own repository; `python3 scripts/sync_detector.py` copies it again and lists any file that has changed (`--check` only lists). The detector file's format is described in `src/detector/file.ts`. No trained network is part of this repository.
+
+`SPINE_ANGLES_TEST_BUILD=1 npm run build` makes a test build that also looks for a detector file served beside the app, in `detector/` (`detector/index.json` names the file, or its pieces for a host that limits a file's size), and has no offline mode or install prompt. The normal build never looks there.
 
 ## Licence
 

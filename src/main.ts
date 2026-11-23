@@ -8,7 +8,9 @@ import { drawOverlay, colorFor } from './draw'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
 import { buildLabels, hasLabels, readLabels } from './labels'
-import { findDetector, requestGuess } from './auto'
+import {
+  findDetector, findService, requestGuess, addDetectorFile, removeDetectorFile, endDetector, NotOffered, DetectorFileError, type Detector, type Found,
+} from './auto'
 import {
   FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, FeatureId, MeasureDef, Plane,
   stepsFor, isComplete, compute, formatValue,
@@ -58,8 +60,17 @@ try {
 const skipped = new Set<FeatureId>()
 let facingOverride = 0
 let age: number | undefined
-/** Address of a detector the user runs for automatic guesses, or null (the normal case). */
-let detector: string | null = null
+/** The detector for automatic guesses: a detector file run on this device, or a service the user runs; null (the normal case) for none. */
+let detector: Detector | null = null
+/** The user has added a detector file (kept on this device, or for this session if the browser would not keep it). */
+let detectorAdded = false
+/** A detector file is here, but this browser cannot run it; said once when a photo is opened. */
+let notOffered = false
+let notOfferedSaid = false
+/** Why a detector file could not be used, in plain words, or null. */
+let detectorProblem: string | null = null
+/** The on-device detector has started (its self-test passed) and is waiting for photos. */
+let detectorReady = false
 /** Counts guess requests: a reply is used only if it is still the latest and for the same photo. */
 let guessToken = 0
 let guessing = false
@@ -394,7 +405,7 @@ async function runGuess() {
     if (!n && !stale.length) undoStack.pop() // nothing changed, so there is nothing to undo
     toast(n ? `${n} landmark${n > 1 ? 's' : ''} guessed. Drag to adjust; tap one to delete it.` : 'Nothing was found to place on this photo')
   } catch (err) {
-    if (token === guessToken) toast(`No automatic guess: ${err instanceof Error ? err.message : 'it failed'}`)
+    if (token === guessToken) toast(err instanceof NotOffered ? NOT_OFFERED : `No automatic guess: ${err instanceof Error ? err.message : 'it failed'}`)
   } finally {
     if (token === guessToken) {
       guessing = false
@@ -848,6 +859,10 @@ async function openPhoto(file: Blob) {
   guessToken++
   guessing = false
   if (detector) void runGuess()
+  else if (notOffered && !notOfferedSaid) {
+    notOfferedSaid = true
+    toast(NOT_OFFERED)
+  }
 }
 
 function transformPhoto(next: HTMLCanvasElement, map: (p: Pt) => Pt) {
@@ -943,19 +958,106 @@ stage.addEventListener('drop', (e) => {
 
 $('btn-undo').addEventListener('click', undo)
 $('btn-auto').addEventListener('click', () => void runGuess())
-// Only a user who runs a detector has one; for everyone else this finds nothing and the app is unchanged.
-void findDetector().then((found) => {
-  detector = found
-  if (!found) return
-  let where = found
+
+// ---------------------------------------------------------------- finding a detector
+
+const NOT_OFFERED = 'The automatic guess needs a graphics feature (WebGPU) that this browser does not offer.'
+const PRIVACY = $('note-privacy').textContent ?? ''
+
+const hostOf = (base: string) => {
   try {
-    where = new URL(found).host
+    return new URL(base).host
   } catch {
-    // Keep the address as given.
+    return base
   }
-  $('note-privacy').textContent = `Automatic guess is on: each photo you open is sent to the detector at ${where} to find landmarks, and nowhere else.`
+}
+
+/** Say which detector is in use (start screen), and offer to add or remove a detector file. */
+function showDetector() {
+  const d = detector
+  $('auto-text').textContent =
+    d?.kind === 'device'
+      ? !detectorReady ? 'Automatic landmark guess: getting ready…'
+        : d.from === 'added' ? 'Automatic landmark guess: on, with the detector file kept on this device.' : 'Automatic landmark guess: on.'
+      : notOffered ? NOT_OFFERED
+      : detectorProblem ? detectorProblem
+      : d?.kind === 'service' ? `Automatic landmark guess: on, from the detector at ${hostOf(d.base)}.`
+      : 'Automatic landmark guess: off.'
+  $('btn-detector-add').hidden = detectorAdded
+  $('btn-detector-remove').hidden = !detectorAdded
+  $('note-privacy').textContent =
+    d?.kind === 'device' ? 'Automatic guess is on: it is worked out on this device, and your photo is sent nowhere.'
+      : d?.kind === 'service' ? `Automatic guess is on: each photo you open is sent to the detector at ${hostOf(d.base)} to find landmarks, and nowhere else.`
+      : PRIVACY
+}
+
+/** Use what was found. A detector file whose engine cannot run here gives way to a detector service, if the user runs one. */
+function useDetector(found: Found) {
+  if (detector !== found.detector) endDetector(detector)
+  detector = found.detector
+  notOffered = found.notOffered
+  detectorAdded = found.added
+  detectorProblem = null
+  detectorReady = false
+  const d = detector
+  if (d?.kind === 'device') {
+    d.device.ready.then(() => {
+      if (detector !== d) return
+      detectorReady = true
+      showDetector()
+    }, async (err) => {
+      if (detector !== d) return
+      detector = null
+      if (err instanceof NotOffered) notOffered = true
+      else detectorProblem = err instanceof DetectorFileError ? err.message : `The automatic guess could not start: ${err instanceof Error ? err.message : 'it failed'}.`
+      showDetector()
+      refresh()
+      const base = await findService()
+      if (base && detector === null) {
+        detector = { kind: 'service', base }
+        showDetector()
+        refresh()
+      }
+    })
+  }
+  showDetector()
   refresh()
-  if (src && !doc.measures.length && !Object.keys(doc.features).length) void runGuess()
+  if (detector && src && !doc.measures.length && !Object.keys(doc.features).length) void runGuess()
+}
+
+// Only a user who added a detector file or runs a detector service has one; for everyone else this finds nothing and the
+// app is unchanged.
+void findDetector().then(useDetector)
+
+const detectorInput = $<HTMLInputElement>('detector-file')
+$('btn-detector-add').addEventListener('click', () => detectorInput.click())
+detectorInput.addEventListener('change', async () => {
+  const f = detectorInput.files?.[0]
+  detectorInput.value = ''
+  if (!f) return
+  try {
+    const got = await addDetectorFile(f)
+    if (got.notOffered) {
+      endDetector(detector)
+      detector = null
+      const base = await findService()
+      useDetector({ detector: base ? { kind: 'service', base } : null, notOffered: true, added: true })
+      toast(NOT_OFFERED)
+      return
+    }
+    useDetector({ detector: got.detector, notOffered: false, added: true })
+    toast(got.kept ? 'Detector file added and kept on this device.' : 'Detector file added for this session only: this browser would not keep it.')
+  } catch (err) {
+    toast(err instanceof Error ? err.message : 'That file could not be used.')
+  }
+})
+$('btn-detector-remove').addEventListener('click', async () => {
+  if (!confirm('Remove the detector file from this device? The automatic guess stops until a detector file is added again.')) return
+  await removeDetectorFile()
+  endDetector(detector)
+  detector = null
+  useDetector(await findDetector())
+  toast('Detector file removed')
 })
 $('btn-clear').addEventListener('click', clearAll)
 $('btn-adjust').addEventListener('click', () => toggleSheet('adjust'))

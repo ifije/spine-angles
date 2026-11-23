@@ -55,6 +55,13 @@ Step-by-step prompts ("tap the anterior S1 endplate"), skippable so partial sets
 - Deploy to static HTTPS hosting
 - On-device test pass on iPhone Safari
 
+### Automatic guess (added after the first release)
+A first guess of the sagittal landmarks, for the user to drag, keep or delete; never a measurement on its own.
+- Guessed: the femoral heads, the S1, L4 and L1 endplates and the L1 body, placed as ordinary guided landmarks with a question mark until moved or kept; PI, PT, SS, LL, L4–S1, PI−LL and the L1 pelvic angle follow from them. Auto again replaces only untouched guesses; Save labels marks untouched guesses `"annotator": "auto"`.
+- Where the guess comes from, in order: (1) **a detector file the user adds** ("Add detector file" on the start screen; checked, kept on the device in IndexedDB, removable), run on the device; (2) **a detector file beside the app**, only in a test build made to look for one; (3) **a detector service the user runs**, which is sent the photo. With none, the app is exactly as before and fetches nothing new.
+- On the device the photo never leaves the page: it is read from the app's canvas, turned grey and given to a small WebGPU engine (hand-written shaders for this one family of networks, no machine-learning runtime) that runs one network in two looks: the whole picture shrunk, to find the spine; then a crop framed from S1, which gives the lumbar endplates, the femoral heads and both ends of S1. About a second on a phone. The engine is started once, self-tested and warmed up when the detector is found, and held.
+- The network and every number of its reading come in the detector file, which is made and trained separately and is not part of this repository. Without WebGPU (or if the engine's self-test fails) the app says so in one line and makes no guess.
+
 ### Phase 4 — Optional, later
 - Four-corner perspective straighten
 - Calibration against a known length to unlock SVA and other distances
@@ -70,7 +77,10 @@ Step-by-step prompts ("tap the anterior S1 endplate"), skippable so partial sets
   - `src/model.ts`, `src/draw.ts` — measurement model and overlay drawing (screen, loupe, export)
   - `src/image.ts`, `src/export.ts` — photo loading/transforms and share/export
   - `src/main.ts` — viewer, touch handling and UI
-- **Tests:** Vitest on the geometry module with known-answer cases, including checks that PI = PT + SS and that results survive image flip and rotation.
+  - `src/labels.ts` — the `spine-labels/1` record (Save labels) and the way back from it (a guess)
+  - `src/auto.ts` — finding a detector and asking it for a guess
+  - `src/detector/` — the on-device detector: the engine and the landmark path (copied from the detector's own repository by `scripts/sync_detector.py`), the detector file's format (`file.ts`), the conversion of its answer to a `spine-labels/1` record (`record.ts`), and keeping the added file (`store.ts`)
+- **Tests:** Vitest on the geometry module with known-answer cases, including checks that PI = PT + SS and that results survive image flip and rotation; on the label record; and on the detector file's format (a tiny made-up file) and the guess's conversion.
 - **Hosting:** static files on GitHub Pages or Cloudflare Pages (both free, HTTPS). During development, the Vite dev server is reachable from the phone on the same Wi-Fi.
 
 ## Licensing and naming
@@ -81,9 +91,9 @@ SpineForgePlanner is GPL-3.0. This project is written from scratch using standar
 
 There is no server and no data store, so there is little to clean:
 
-- **On the phone:** images live in memory only and are gone when the app closes. A "Clear" button resets the session. If case saving is added in Phase 4, it gets a "Delete all saved cases" control and a storage-used readout.
+- **On the phone:** images live in memory only and are gone when the app closes. A "Clear" button resets the session. A detector file the user added (about 13 MB) is the only thing kept; "Remove detector file" on the start screen deletes it. If case saving is added in Phase 4, it gets a "Delete all saved cases" control and a storage-used readout.
 - **App cache:** the service worker cache is versioned per release and old versions are deleted on activation, so stale files do not accumulate.
-- **Development machine:** `npm run clean` removes `dist/`, test coverage and Vite's cache. `node_modules/` and `dist/` are git-ignored.
+- **Development machine:** `npm run clean` removes `dist/`, test coverage and Vite's cache. `node_modules/` and `dist/` are git-ignored, and so are detector files (`public/detector/`, `spine-detector*`), which hold a trained network and never belong in the repository. Test builds are made outside the repository.
 - **Dependencies:** `npm outdated` and `npm audit` once a quarter; the dependency list is kept short on purpose.
 
 ## Project records

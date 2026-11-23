@@ -2,12 +2,18 @@ import { defineConfig } from 'vitest/config'
 import { VitePWA } from 'vite-plugin-pwa'
 import pkg from './package.json'
 
+// A test build (SPINE_ANGLES_TEST_BUILD=1) looks for a detector file served beside the app (detector/index.json) and has
+// no offline mode: no service worker and no web app manifest, so no install prompt. The normal build is unchanged.
+const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {}
+const testBuild = env.SPINE_ANGLES_TEST_BUILD === '1'
+
 export default defineConfig({
   // Relative paths so the build works from any sub-path (e.g. GitHub Pages).
   base: './',
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  define: { __APP_VERSION__: JSON.stringify(pkg.version), __DETECTOR_BESIDE__: JSON.stringify(testBuild) },
   plugins: [
     VitePWA({
+      disable: testBuild,
       registerType: 'autoUpdate',
       includeAssets: ['apple-touch-icon.png', 'icon.svg'],
       manifest: {

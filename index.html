@@ -43,6 +43,11 @@
             <li id="note-privacy">Your photo stays on this device. Nothing is uploaded.</li>
             <li>Approximate measurements for convenience, not for diagnostic use.</li>
           </ul>
+          <p id="auto-line">
+            <span id="auto-text">Automatic landmark guess: off.</span>
+            <button id="btn-detector-add" class="small">Add detector file</button>
+            <button id="btn-detector-remove" class="small" hidden>Remove detector file</button>
+          </p>
         </section>
 
         <div id="hint" hidden>
@@ -113,6 +118,7 @@
       </nav>
     </div>
     <input type="file" id="file" accept="image/*" hidden />
+    <input type="file" id="detector-file" hidden />
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

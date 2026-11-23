@@ -67,6 +67,11 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 }
 #top button { padding: 0 10px; }
 .spacer { flex: 1; }
+/* Phone width: with the Auto button shown, Share still fits on the bar (without it, nothing changes). */
+@media (max-width: 430px) {
+  #top:has(#btn-auto:not([hidden])) { gap: 4px; }
+  #top:has(#btn-auto:not([hidden])) button { padding: 0 8px; }
+}
 
 #stage {
   position: relative;
@@ -117,6 +122,8 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 #empty p { margin: 0 0 10px; color: var(--muted); }
 #empty ul { max-width: 340px; margin: 14px 0 0; padding-left: 18px; text-align: left; color: var(--muted); font-size: 13.5px; }
 #empty li { margin: 6px 0; }
+#auto-line { max-width: 340px; margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 8px; color: var(--muted); font-size: 13px; }
+#auto-line button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
 #empty.drag { outline: 2px dashed var(--accent); outline-offset: -10px; }
 
 #hint {
