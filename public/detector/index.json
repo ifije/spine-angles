@@ -3,5 +3,10 @@
  "detector": "a3",
  "file": "spine-detector-0fd46cda9d0a31a9.bin",
  "bytes": 12676336,
- "stamp": "0fd46cda9d0a31a9596cb92c1c33f4b5fca54402b2857d9bd3e5c2dce5b84fd2"
+ "stamp": "0fd46cda9d0a31a9596cb92c1c33f4b5fca54402b2857d9bd3e5c2dce5b84fd2",
+ "graph": {
+  "file": "spine-detector-0fd46cda9d0a31a9.graph.onnx",
+  "bytes": 34086,
+  "sha256": "d4b09fd19e06c1ed0aba555cb8174e2055ff326dac3e948d79eb7248efd4a06b"
+ }
 }

@@ -12,6 +12,7 @@ import {
   findDetector, findService, requestGuess, addDetectorFile, removeDetectorFile, endDetector, dropPublished, setGuessOff,
   NotOffered, DetectorFileError, type Detector, type Found,
 } from './auto'
+import { guessView, failureText, ofMB } from './waiting'
 import {
   FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, MEASURE_BY_KEY, FeatureId, MeasureDef, MeasureState, NeedState, Plane, Result,
   stepsFor, isComplete, compute, formatValue, measureState, needsText,
@@ -75,9 +76,8 @@ let age: number | undefined
 let detector: Detector | null = null
 /** The user has added a detector file (kept on this device, or for this session if the browser would not keep it). */
 let detectorAdded = false
-/** A detector file is here, but this browser cannot run it; said once when a photo is opened. */
+/** A detector is here, but this browser can run it in no way (neither the engine nor the slower way). */
 let notOffered = false
-let notOfferedSaid = false
 /** Why a detector file could not be used, in plain words, or null. */
 let detectorProblem: string | null = null
 /** The on-device detector has started (its self-test passed) and is waiting for photos. */
@@ -90,6 +90,25 @@ let dlTotal = 0
 let dlFailed = false
 /** Whether the built-in detector is kept on this device (null: not known yet). */
 let keptHere: boolean | null = null
+/** The slower way's own download (the runtime), where the engine cannot run: bytes so far and in all. */
+let rtGot = 0
+let rtTotal = 0
+/** The app is still finding out whether there is a detector. */
+let looking = true
+/** The automatic guess wanted for the photo on screen (it opened, or Auto was tapped), until placed, skipped or failed;
+ *  `edits`: the count of hand edits when it was asked for (`manual`: asked for with Auto, so placed even after hand edits). */
+let wanted: { photo: HTMLCanvasElement; edits: number; manual: boolean } | null = null
+/** Hand edits so far (every change a person makes): a guess asked for by opening a photo is not placed over them. */
+let handEdits = 0
+/** The guess for this photo is running (the detector is ready) since this time, or null. */
+let findingSince: number | null = null
+/** The detector became ready after the user worked by hand: Auto places the guess for what is not placed yet. */
+let readyForAuto = false
+/** Why the last attempt failed, in plain words, until dismissed or tried again; whether its line was closed. */
+let guessFailure: string | null = null
+let lineDismissed = false
+/** The slower way is in use: why, and about how long a photo takes. */
+let slower: { why: 'no-webgpu' | 'engine-failed' | null; perPhotoS: number | null } | null = null
 /** Counts guess requests: a reply is used only if it is still the latest and for the same photo. */
 let guessToken = 0
 let guessing = false
@@ -240,6 +259,7 @@ function setTilt(deg: number) {
 const snapshot = () => JSON.stringify({ doc, activeId, replacing })
 
 function pushUndo(snap = snapshot()) {
+  handEdits++
   undoStack.push(snap)
   if (undoStack.length > 200) undoStack.shift()
 }
@@ -247,6 +267,7 @@ function pushUndo(snap = snapshot()) {
 function undo() {
   const snap = undoStack.pop()
   if (!snap) return
+  handEdits++
   const s = JSON.parse(snap) as { doc: Doc; activeId: number | null; replacing?: FeatureId | null }
   doc = s.doc
   replacing = tool === 'guided' ? s.replacing ?? null : null
@@ -429,18 +450,42 @@ function keepFeature(id: FeatureId) {
 // ---------------------------------------------------------------- automatic guess
 
 /**
- * Ask the detector for its best guess and place it as ordinary landmarks, to be dragged,
- * kept or deleted. Landmarks a person placed, moved or kept are left alone; guesses from an
- * earlier run that nobody touched are replaced.
+ * Ask the detector for its best guess and place it as ordinary landmarks, to be dragged, kept or deleted. Landmarks a person
+ * placed, moved or kept are left alone; guesses from an earlier run that nobody touched are replaced. A guess asked for by
+ * opening a photo waits for the detector (the photo screen says how far it is) and is not placed if the user has started
+ * by hand meanwhile: then the line says that Auto is ready. One asked for with Auto is placed in any case.
  */
 async function runGuess() {
-  if (!src || !detector || guessing) return
+  if (!src || !detector || guessing || !wanted || wanted.photo !== src) return
   const photo = src
+  const want = wanted
+  const d = detector
   const token = ++guessToken
   guessing = true
+  guessFailure = null
+  readyForAuto = false
+  lineDismissed = false
   refresh()
+  let stage: 'download' | 'runtime' | 'start' | 'guess' = 'start'
   try {
-    const rec = await requestGuess(detector, photo)
+    if (d.kind === 'device') {
+      try {
+        await d.device.ready
+      } catch (err) {
+        stage = err instanceof NotOffered ? 'start' : d.device.failedAt === 'runtime' ? 'runtime' : d.device.failedAt === 'file' ? 'download' : 'start'
+        throw err
+      }
+    }
+    if (token !== guessToken || photo !== src) return
+    if (!want.manual && handEdits !== want.edits) {
+      // The user started by hand while waiting: nothing is placed for them; Auto is there when they want it.
+      readyForAuto = true
+      return
+    }
+    stage = 'guess'
+    findingSince = performance.now()
+    refresh()
+    const rec = await requestGuess(d, photo)
     if (token !== guessToken || photo !== src) return
     const got = readLabels(rec, 0.035 * Math.max(photo.width, photo.height))
     pushUndo()
@@ -456,15 +501,35 @@ async function runGuess() {
       n++
     }
     if (!n && !stale.length) undoStack.pop() // nothing changed, so there is nothing to undo
+    if (wanted === want) wanted = null
     toast(n ? `${n} landmark${n > 1 ? 's' : ''} guessed. Drag to adjust; tap one to delete it.` : 'Nothing was found to place on this photo')
   } catch (err) {
-    if (token === guessToken) toast(err instanceof NotOffered ? NOT_OFFERED : `No automatic guess: ${err instanceof Error ? err.message : 'it failed'}`)
+    if (token === guessToken && !(err instanceof NotOffered)) guessFailure = failureText(err, stage)
   } finally {
     if (token === guessToken) {
       guessing = false
+      findingSince = null
       refresh()
     }
   }
+}
+
+/** Auto, or "Try again": a guess for the photo on screen, placed even over hand work (only where nothing is placed). After a
+ *  failure the detector is looked for again (a download that stopped starts again). */
+function askGuess() {
+  if (!src) return
+  wanted = { photo: src, edits: handEdits, manual: true }
+  readyForAuto = false
+  lineDismissed = false
+  const failedBefore = !!guessFailure || dlFailed || !!detectorProblem || !!found?.later || !detector
+  guessFailure = null
+  if (failedBefore && !guessing) {
+    redownloaded = false
+    startFinding()
+    refresh()
+    return
+  }
+  void runGuess()
 }
 
 /** Clear one group: the basic tools' measurements, or one plane's guided landmarks. */
@@ -737,8 +802,6 @@ function updateHint() {
         refresh()
       }))
     }
-  } else if (src && guessing) {
-    text = detector?.kind === 'device' && downloading() ? `Getting the landmark detector (${mb(dlGot)} of ${mb(dlTotal)})…` : 'Finding landmarks…'
   }
   $('hint-text').textContent = text
   hint.hidden = !text
@@ -986,9 +1049,7 @@ function refresh() {
   if (doc.auto) for (const id of Object.keys(doc.auto) as FeatureId[]) if (!doc.features[id]) delete doc.auto[id]
   updateHint()
   const has = !!src
-  const btnAuto = $<HTMLButtonElement>('btn-auto')
-  btnAuto.hidden = !detector
-  btnAuto.disabled = !has || guessing
+  showGuessState()
   $<HTMLButtonElement>('btn-undo').disabled = !undoStack.length
   for (const id of ['btn-adjust', 'btn-clear', 'btn-share']) $<HTMLButtonElement>(id).disabled = !has
   $('btn-adjust').classList.toggle('on', sheet === 'adjust')
@@ -1065,11 +1126,13 @@ async function openPhoto(file: Blob) {
   // A reply still on its way belongs to the previous photo.
   guessToken++
   guessing = false
+  findingSince = null
+  guessFailure = null
+  readyForAuto = false
+  lineDismissed = false
+  wanted = found?.off ? null : { photo: src, edits: handEdits, manual: false }
   if (detector) void runGuess()
-  else if (notOffered && !notOfferedSaid) {
-    notOfferedSaid = true
-    toast(NOT_OFFERED)
-  }
+  refresh()
 }
 
 function transformPhoto(next: HTMLCanvasElement, map: (p: Pt) => Pt) {
@@ -1164,11 +1227,11 @@ stage.addEventListener('drop', (e) => {
 }
 
 $('btn-undo').addEventListener('click', undo)
-$('btn-auto').addEventListener('click', () => void runGuess())
+$('btn-auto').addEventListener('click', askGuess)
 
 // ---------------------------------------------------------------- finding a detector
 
-const NOT_OFFERED = 'The automatic guess needs a graphics feature (WebGPU) that this browser does not offer.'
+const CANNOT_RUN = 'Automatic landmark guess: it cannot run in this browser. Measure with the tools as usual.'
 const PRIVACY = $('note-privacy').textContent ?? ''
 
 const hostOf = (base: string) => {
@@ -1180,8 +1243,12 @@ const hostOf = (base: string) => {
 }
 
 const mb = (n: number) => `${Math.max(1, Math.round(n / 1e6))} MB`
-/** The built-in detector is still downloading. */
+/** The built-in detector, or the slower way's files, still downloading. */
 const downloading = () => found?.published?.from === 'download' && !detectorReady && dlTotal > 0 && dlGot < dlTotal
+const runtimeDownloading = () => detector?.kind === 'device' && detector.device.stage === 'runtime' && rtTotal > 0 && rtGot < rtTotal
+/** Why the slower way: known from its start (while its files download), then from what it said when ready. */
+const slowerReason = () => slower?.why ?? (detector?.kind === 'device' ? detector.device.why : null)
+const slowerWhy = () => (slowerReason() === 'engine-failed' ? "this device's graphics chip did not pass the detector's check" : 'this browser has no WebGPU')
 
 /** Say on the start screen what the automatic guess is doing, in plain words, with its one switch. */
 function showDetector() {
@@ -1191,16 +1258,19 @@ function showDetector() {
   let text: string
   if (off) text = 'Automatic landmark guess: off.'
   else if (d?.kind === 'device') {
-    if (downloading()) text = `Automatic landmark guess: downloading the landmark detector, ${mb(dlGot)} of ${mb(dlTotal)}. This happens once; it is then kept on this device.`
-    else if (!detectorReady) text = 'Automatic landmark guess: getting ready…'
+    if (downloading()) text = `Automatic landmark guess: downloading the landmark detector, ${ofMB(dlGot, dlTotal)}. This happens once; it is then kept on this device.`
+    else if (runtimeDownloading()) text = `Automatic landmark guess: ${slowerWhy()}, so the app is downloading what the slower way needs, ${ofMB(rtGot, rtTotal)}. This happens once.`
+    else if (!detectorReady) text = d.device.stage === 'runtime' || d.device.stage === 'processor' ? 'Automatic landmark guess: getting the slower way ready…' : 'Automatic landmark guess: getting ready…'
+    else if (slower) text = `Automatic landmark guess: on, the slower way: ${slowerWhy()}. A photo takes about ${slower.perPhotoS ?? 'ten'} seconds.`
     else if (d.from === 'added') text = 'Automatic landmark guess: on, with your own detector file.'
     else if (keptHere === false) text = 'Automatic landmark guess: on. This browser does not let the app keep the landmark detector, so it is downloaded again each time the app opens.'
     else text = 'Automatic landmark guess: on.'
-  } else if (notOffered) text = NOT_OFFERED
+  } else if (notOffered) text = CANNOT_RUN
   else if (detectorProblem) text = detectorProblem
   else if (dlFailed) text = 'Automatic landmark guess: the landmark detector could not be downloaded. The app tries again the next time it opens.'
   else if (found?.later) text = `Automatic landmark guess: the landmark detector (${size}) will be downloaded the next time the app opens with a connection.`
   else if (d?.kind === 'service') text = `Automatic landmark guess: on, from the detector at ${hostOf(d.base)}.`
+  else if (looking) text = 'Automatic landmark guess: getting ready…'
   else text = 'Automatic landmark guess: off.'
   $('auto-text').textContent = text
   const toggle = $<HTMLButtonElement>('btn-auto-toggle')
@@ -1208,8 +1278,10 @@ function showDetector() {
   toggle.hidden = !off && !d && !dlFailed && !found?.later && !detectorProblem
   toggle.textContent = off ? 'Turn on' : 'Turn off'
   const bar = $('auto-bar')
-  bar.hidden = !(d?.kind === 'device' && downloading())
-  ;(bar.querySelector('.fill') as HTMLElement).style.width = dlTotal ? `${Math.round((100 * dlGot) / dlTotal)}%` : '0'
+  const dl = downloading() ? [dlGot, dlTotal] : runtimeDownloading() ? [rtGot, rtTotal] : null
+  bar.hidden = !(d?.kind === 'device' && dl)
+  ;(bar.querySelector('.fill') as HTMLElement).style.width = dl ? `${Math.round((100 * dl[0]) / dl[1])}%` : '0'
+  $('faster').hidden = !(d?.kind === 'device' && detectorReady && slower)
   $('btn-detector-add').hidden = detectorAdded
   $('btn-detector-remove').hidden = !detectorAdded
   $('own-text').textContent = detectorAdded
@@ -1221,10 +1293,57 @@ function showDetector() {
       : PRIVACY
 }
 
+/** The photo screen's line about the automatic guess, and the Auto button, from the state above (waiting.ts). */
+function showGuessState() {
+  const d = detector
+  const dl = downloading() ? { what: 'detector' as const, got: dlGot, total: dlTotal } : runtimeDownloading() ? { what: 'runtime' as const, got: rtGot, total: rtTotal } : null
+  const v = guessView({
+    wanted: !!src && !!wanted && wanted.photo === src,
+    off: !!found?.off,
+    looking,
+    kind: d?.kind ?? null,
+    stage: d?.kind === 'device' ? (detectorReady ? 'ready' : d.device.stage) : null,
+    download: dl,
+    slower: d?.kind === 'device' && (slower || d.device.stage === 'runtime' || d.device.stage === 'processor') ? slower ?? { why: slowerReason(), perPhotoS: null } : null,
+    finding: findingSince === null ? null : (performance.now() - findingSince) / 1000,
+    byHand: !!wanted && !wanted.manual && handEdits !== wanted.edits,
+    readyForAuto,
+    failed: guessFailure ?? (src && wanted && !d && !looking && !notOffered && (dlFailed || detectorProblem || found?.later)
+      ? dlFailed ? failureText(null, 'download') : detectorProblem ?? `Automatic guess: the landmark detector will be downloaded the next time there is a connection.`
+      : null),
+    cannotRun: notOffered && !d,
+    dismissed: lineDismissed,
+  })
+  const line = $('wait-line')
+  line.hidden = !v.line
+  if (v.line) {
+    $('wait-text').textContent = v.line.text
+    $('wait-bar').hidden = v.line.progress === null
+    ;($('wait-bar').querySelector('.fill') as HTMLElement).style.width = `${v.line.progress ?? 0}%`
+    $('btn-wait-retry').hidden = !v.line.retry
+    $('btn-wait-close').hidden = !v.line.dismiss
+  }
+  stage.style.setProperty('--wait-h', v.line ? `${line.offsetHeight + 8}px` : '0px')
+  const auto = $<HTMLButtonElement>('btn-auto')
+  auto.hidden = v.auto.hidden || !src
+  auto.disabled = v.auto.disabled || !src
+  auto.textContent = v.auto.label
+  // how far its download is, filled behind the label
+  // busy, not dead: the guess is on its way (not dimmed like a button that does nothing)
+  auto.classList.toggle('busy', v.auto.disabled && !v.auto.hidden && v.auto.label !== 'Auto')
+  auto.style.background = v.auto.progress === null ? '' : `linear-gradient(to right, rgba(255, 213, 74, 0.45) ${v.auto.progress}%, var(--panel-2) ${v.auto.progress}%)`
+}
+
+// While a guess runs the slower way, its seconds count on the photo screen.
+setInterval(() => {
+  if (findingSince !== null && slower) showGuessState()
+}, 500)
+
 /** Use what was found. A detector whose engine cannot run here gives way to a detector service, if the user runs one. */
 function useDetector(f: Found) {
   if (detector !== f.detector) endDetector(detector)
   found = f
+  looking = false
   detector = f.detector
   notOffered = f.notOffered
   detectorAdded = f.added
@@ -1232,6 +1351,7 @@ function useDetector(f: Found) {
   detectorReady = false
   dlFailed = false
   keptHere = null
+  slower = null
   const d = detector
   if (d?.kind === 'device') {
     f.published?.kept.then((k) => {
@@ -1239,9 +1359,16 @@ function useDetector(f: Found) {
       keptHere = k
       showDetector()
     })
-    d.device.ready.then(() => {
+    // the start's stages (the slower way's files, its start) are shown as they come
+    const watching = setInterval(() => {
+      if (detector !== d || detectorReady || d.device.stage === 'failed') return clearInterval(watching)
+      showDetector()
+      showGuessState()
+    }, 400)
+    d.device.ready.then((info) => {
       if (detector !== d) return
       detectorReady = true
+      slower = info.how === 'processor' ? { why: info.why, perPhotoS: info.perPhotoS } : null
       showDetector()
       refresh()
     }, async (err) => {
@@ -1254,8 +1381,8 @@ function useDetector(f: Found) {
         await dropPublished()
         return startFinding()
       } else if (err instanceof DetectorFileError) detectorProblem = err.message
-      else if (f.published?.from === 'download') dlFailed = true
-      else detectorProblem = `The automatic guess could not start: ${err instanceof Error ? err.message : 'it failed'}.`
+      else if (d.device.failedAt === 'file' && f.published?.from === 'download') dlFailed = true
+      else detectorProblem = failureText(err, d.device.failedAt === 'runtime' ? 'runtime' : 'start')
       showDetector()
       refresh()
       const base = await findService()
@@ -1268,7 +1395,8 @@ function useDetector(f: Found) {
   }
   showDetector()
   refresh()
-  if (detector && src && !doc.measures.length && !Object.keys(doc.features).length) void runGuess()
+  // A photo that opened before the detector was known gets its guess now.
+  if (detector && src && wanted && wanted.photo === src) void runGuess()
 }
 
 let redownloaded = false
@@ -1278,18 +1406,25 @@ let shownMb = -1
 function startFinding() {
   finding?.abort()
   const ctl = (finding = new AbortController())
-  dlGot = dlTotal = 0
+  dlGot = dlTotal = rtGot = rtTotal = 0
+  looking = true
+  showDetector()
   void findDetector({
     signal: ctl.signal,
-    progress: (got, total) => {
+    progress: (got, total, what) => {
       if (finding !== ctl) return
-      dlGot = got
-      dlTotal = total
-      const now = Math.floor(got / 1e6)
+      if (what === 'runtime') {
+        rtGot = got
+        rtTotal = total
+      } else {
+        dlGot = got
+        dlTotal = total
+      }
+      const now = Math.floor(got / 2.5e5)
       if (now === shownMb && got < total) return
       shownMb = now
       showDetector()
-      if (guessing) updateHint()
+      showGuessState()
     },
   }).then((f) => {
     if (finding === ctl) useDetector(f)
@@ -1312,9 +1447,16 @@ $('btn-auto-toggle').addEventListener('click', async () => {
   detector = null
   guessToken++
   guessing = false
+  findingSince = null
+  wanted = null
   await setGuessOff(true)
-  useDetector({ detector: null, notOffered: false, added: detectorAdded, off: true, published: null, later: false })
-  toast('Automatic guess turned off. The landmark detector was removed from this device.')
+  useDetector({ detector: null, notOffered: false, added: detectorAdded, off: true, published: null, later: false, gpu: true })
+  toast('Automatic guess turned off. What it had downloaded was removed from this device.')
+})
+$('btn-wait-retry').addEventListener('click', askGuess)
+$('btn-wait-close').addEventListener('click', () => {
+  lineDismissed = true
+  refresh()
 })
 
 const detectorInput = $<HTMLInputElement>('detector-file')
@@ -1327,15 +1469,7 @@ detectorInput.addEventListener('change', async () => {
     const got = await addDetectorFile(f)
     finding?.abort()
     finding = null
-    const base = { notOffered: false, added: true, off: false, published: null, later: false }
-    if (got.notOffered) {
-      endDetector(detector)
-      detector = null
-      const service = await findService()
-      useDetector({ ...base, detector: service ? { kind: 'service', base: service } : null, notOffered: true })
-      toast(NOT_OFFERED)
-      return
-    }
+    const base = { notOffered: false, added: true, off: false, published: null, later: false, gpu: true }
     useDetector({ ...base, detector: got.detector })
     toast(got.kept ? 'Detector file added and kept on this device.' : 'Detector file added for this session only: this browser would not keep it.')
   } catch (err) {

@@ -50,7 +50,9 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] Test build that finds a detector file beside the app (`SPINE_ANGLES_TEST_BUILD=1`), no offline mode
 - [x] One plain line when the browser has no WebGPU
 - [ ] Try the on-device guess on a real iPhone in Safari, installed and not (does Safari offer WebGPU there?)
-- [ ] A way to guess without WebGPU (the processor), if Safari needs it
+- [x] A way to guess without WebGPU (0.5.0): the same network on the processor (ONNX Runtime Web, one thread, in a worker), its files fetched only then and kept for offline use
+- [x] A photo opened before the detector is ready: a line that stays, with progress, failures with Try again, no guess over hand work
+- [ ] Time the slower way on a real iPhone without WebGPU (iOS 18), and decide whether threads (cross-origin isolation headers) are worth it
 - [x] The detector's code is published with the app (2026-11-23)
 - [x] The trained detector is published with the app (0.4.0): downloaded once in the background, kept on the device by its stamp, works offline, replaced when a new one is published; one switch to turn it off and on; Credits on the start screen and Acknowledgements in the README
 - [ ] Check the first download and offline use on a real iPhone (installed and not), and how long the first download takes there

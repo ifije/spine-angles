@@ -12,9 +12,10 @@
 // Each answers with a record in the "spine-labels/1" format. The user can turn the automatic guess off (remembered): then
 // nothing is downloaded, the kept copy of the built-in detector is removed, and no detector of any kind is asked.
 
-import { readDetectorFile, readHeader, startDetector, webgpuOffered, type DeviceDetector, type GuessRecord } from './detector'
-import { download, isIndex, type DetectorIndex } from './detector/download'
-import { drop, keep, keepAdded, loadAdded, loadKept, removeAdded } from './detector/store'
+import { readDetectorFile, readHeader, startDetector, webgpuOffered, type DeviceDetector, type GuessRecord, type RuntimeFiles } from './detector'
+import cpuWorkerUrl from './detector/cpu-worker?worker&url'
+import { download, isIndex, DownloadError, type DetectorIndex } from './detector/download'
+import { drop, keep, keepAdded, keepFiles, loadAdded, loadFiles, loadKept, removeAdded } from './detector/store'
 
 export { NotOffered, DetectorFileError } from './detector'
 export { DownloadError } from './detector/download'
@@ -34,6 +35,8 @@ export interface Found {
   published: null | { from: 'store' | 'download'; bytes: number; kept: Promise<boolean> }
   /** The built-in detector could not be reached and none is kept (no connection): it is tried again next time. */
   later: boolean
+  /** This browser offers WebGPU (the fast way); without it the slower way, on the processor. */
+  gpu: boolean
 }
 
 const KEY = 'spine-angles:detector'
@@ -63,7 +66,10 @@ export async function setGuessOff(off: boolean): Promise<void> {
   } catch {
     // Not remembered: for this session only.
   }
-  if (off) await drop('published')
+  if (off) {
+    await drop('published')
+    await drop('runtime')
+  }
 }
 
 async function healthy(base: string): Promise<boolean> {
@@ -122,15 +128,103 @@ async function publishedIndex(): Promise<{ url: URL; index: DetectorIndex } | nu
   }
 }
 
-const onDevice = (from: 'added' | 'published', src: { first?: Promise<Uint8Array>; whole: Promise<ArrayBuffer> }): Detector => {
+// ---------------------------------------------------------------- the slower way's files
+
+/** ort/index.json: the processor runtime's files, beside the app (scripts/copy_runtime.mjs). */
+interface RuntimeIndex {
+  version: string
+  files: { name: string; bytes: number; gz?: { name: string; bytes: number } }[]
+}
+
+const RUNTIME_INDEX = 'ort/index.json'
+const ROLES = { ort: 'ort.wasm.min.mjs', glue: 'ort-wasm-simd-threaded.mjs', wasm: 'ort-wasm-simd-threaded.wasm' } as const
+
+async function fetchJson<T>(url: URL): Promise<T | null> {
+  try {
+    const res = await fetch(url, { cache: 'no-cache' })
+    return res.ok ? ((await res.json()) as T) : null
+  } catch {
+    return null
+  }
+}
+
+/** One file's bytes, counted as they arrive (`gunzip`: it is sent compressed and unpacked here). */
+async function fetchBytes(url: URL, counted: (n: number) => void, signal?: AbortSignal, gunzip = false): Promise<ArrayBuffer> {
+  const res = await fetch(url, { signal })
+  if (!res.ok || !res.body) throw new DownloadError(`a file the slower way needs could not be fetched (${res.status})`)
+  const counter = new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, c) { counted(chunk.length); c.enqueue(chunk) } })
+  let body: ReadableStream<Uint8Array> = res.body.pipeThrough(counter)
+  if (gunzip) body = body.pipeThrough(new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>)
+  return new Response(body).arrayBuffer()
+}
+
+/**
+ * The slower way's files: the runtime (ONNX Runtime Web, processor only), its worker and the network's graph. Read from this
+ * device if they are kept there (no request, works with no connection); otherwise fetched once, each only if what is published
+ * now is not the one kept, and kept. Called only where the engine cannot run.
+ */
+async function loadRuntime(graphFrom: Promise<{ url: URL; index: DetectorIndex } | null>, o: FindOptions): Promise<RuntimeFiles> {
+  const [kept, idx, at] = await Promise.all([loadFiles('runtime'), fetchJson<RuntimeIndex>(new URL(RUNTIME_INDEX, document.baseURI)), graphFrom])
+  const workerUrl = new URL(cpuWorkerUrl, document.baseURI)
+  const graph = at?.index.graph
+  // what each part is now: its identity (version, file name, stamp), or null with no connection (then whatever is kept)
+  const want: Record<keyof RuntimeFiles, string | null> = {
+    ort: idx ? `ort@${idx.version}` : null, glue: idx ? `glue@${idx.version}` : null, wasm: idx ? `wasm@${idx.version}` : null,
+    worker: `worker@${workerUrl.pathname.split('/').pop()}`, graph: graph ? `graph@${graph.sha256 ?? graph.file}` : null,
+  }
+  const have = kept?.files ?? {}
+  const pick = (role: keyof RuntimeFiles) => {
+    const id = want[role]
+    const key = id ? (have[id] ? id : null) : Object.keys(have).find((k) => k.startsWith(role + '@')) ?? null
+    return key ? { key, bytes: have[key] } : null
+  }
+  const out: Partial<Record<keyof RuntimeFiles, { key: string; bytes: ArrayBuffer }>> = {}
+  const missing: (keyof RuntimeFiles)[] = []
+  for (const role of Object.keys(want) as (keyof RuntimeFiles)[]) {
+    const k = pick(role)
+    if (k) out[role] = k
+    else missing.push(role)
+  }
+  if (missing.length) {
+    if (!idx || (missing.includes('graph') && !graph)) throw new DownloadError('the files the slower way needs could not be fetched')
+    const gunzip = typeof DecompressionStream !== 'undefined'
+    const entry = (role: 'ort' | 'glue' | 'wasm') => idx.files.find((f) => f.name === ROLES[role])
+    const size = (role: keyof RuntimeFiles) => role === 'graph' ? graph!.bytes : role === 'worker' ? 0
+      : gunzip && entry(role as 'wasm')?.gz ? entry(role as 'wasm')!.gz!.bytes : entry(role as 'wasm')?.bytes ?? 0
+    const total = missing.reduce((n, r) => n + size(r), 0)
+    let got = 0
+    const counted = (n: number) => {
+      got += n
+      o.progress?.(Math.min(got, total), total, 'runtime')
+    }
+    o.progress?.(0, total, 'runtime')
+    for (const role of missing) {
+      let url: URL, packed = false
+      if (role === 'graph') url = new URL(graph!.file, at!.url)
+      else if (role === 'worker') url = workerUrl
+      else {
+        const e = entry(role)
+        if (!e) throw new DownloadError('the runtime is not complete here')
+        packed = gunzip && !!e.gz
+        url = new URL(packed ? e.gz!.name : e.name, new URL(RUNTIME_INDEX, document.baseURI))
+      }
+      out[role] = { key: want[role]!, bytes: await fetchBytes(url, counted, o.signal, packed) }
+    }
+    const files = Object.fromEntries(Object.values(out).map((x) => [x!.key, x!.bytes]))
+    if (!(await keepFiles('runtime', files, idx.version))) await drop('runtime')
+  }
+  return { ort: out.ort!.bytes, glue: out.glue!.bytes, wasm: out.wasm!.bytes, worker: out.worker!.bytes, graph: out.graph!.bytes }
+}
+
+const onDevice = (from: 'added' | 'published', gpu: boolean, src: { first?: Promise<Uint8Array>; whole: Promise<ArrayBuffer> }, runtime: () => Promise<RuntimeFiles>): Detector => {
   // (a download that fails is reported through `ready`; the bytes' own promise is then never waited for)
   src.whole.catch(() => {})
-  const device = startDetector({ from, ...src })
+  const device = startDetector({ from, gpu, runtime, ...src })
   device.ready.catch(() => {})
   return { kind: 'device', from, device }
 }
 
-const NONE: Found = { detector: null, notOffered: false, added: false, off: false, published: null, later: false }
+const NONE: Found = { detector: null, notOffered: false, added: false, off: false, published: null, later: false, gpu: true }
 
 async function orService(found: Partial<Found>): Promise<Found> {
   const base = await findService()
@@ -138,34 +232,37 @@ async function orService(found: Partial<Found>): Promise<Found> {
 }
 
 export interface FindOptions {
-  /** Called as the built-in detector downloads: bytes so far, bytes in all. */
-  progress?: (got: number, total: number) => void
+  /** Called as files download: bytes so far, bytes in all, and which (the detector, or the slower way's runtime). */
+  progress?: (got: number, total: number, what: 'detector' | 'runtime') => void
   /** Stops the download. */
   signal?: AbortSignal
 }
 
 /**
- * The detector to use, in the order above. A detector file is started at once (its engine prepared, self-tested and
- * warmed up in the background; `device.ready` says when, after the download if there is one). Where a detector is here
- * but this browser offers no WebGPU, `notOffered` is set, nothing is downloaded and a service is still looked for.
+ * The detector to use, in the order above. A detector file is started at once (on the graphics chip where this browser
+ * offers WebGPU, else the slower way on the processor; prepared, self-tested and warmed up in the background; `device.ready`
+ * says when, after the downloads if there are any). The slower way's files are fetched only where the engine cannot run.
  */
 export async function findDetector(o: FindOptions = {}): Promise<Found> {
   if (guessOff()) return { ...NONE, off: true }
+  const gpuP = webgpuOffered()
+  const indexP = publishedIndex()
+  const graphFrom = indexP.then((at) => (at && at !== 'unreachable' ? at : null))
+  const runtime = () => loadRuntime(graphFrom, o)
   const added = await loadAdded()
   if (added) {
-    if (await webgpuOffered()) return { ...NONE, detector: onDevice('added', { whole: Promise.resolve(added) }), added: true }
-    return orService({ notOffered: true, added: true })
+    const gpu = await gpuP
+    return { ...NONE, gpu, detector: onDevice('added', gpu, { whole: Promise.resolve(added) }, runtime), added: true }
   }
-  const [at, stored] = await Promise.all([publishedIndex(), loadKept('published')])
+  const [at, stored, gpu] = await Promise.all([indexP, loadKept('published'), gpuP])
   const index = at && at !== 'unreachable' ? at : null
-  if (!index && !stored) return orService({ later: at === 'unreachable' })
-  if (!(await webgpuOffered())) return orService({ notOffered: true })
+  if (!index && !stored) return orService({ later: at === 'unreachable', gpu })
   if (stored && (!index || index.index.stamp === stored.stamp)) {
     // Kept on this device: no request for the file (and none needed with no connection).
-    return { ...NONE, detector: onDevice('published', { whole: Promise.resolve(stored.bytes) }), published: { from: 'store', bytes: stored.bytes.byteLength, kept: Promise.resolve(true) } }
+    return { ...NONE, gpu, detector: onDevice('published', gpu, { whole: Promise.resolve(stored.bytes) }, runtime), published: { from: 'store', bytes: stored.bytes.byteLength, kept: Promise.resolve(true) } }
   }
   // Not kept yet, or a new one is published: downloaded in the background, then kept by its stamp in place of the old one.
-  const dl = download(index!.index, index!.url, o)
+  const dl = download(index!.index, index!.url, { ...o, progress: (g, t) => o.progress?.(g, t, 'detector') })
   let kept: (k: boolean) => void = () => {}
   const keptP = new Promise<boolean>((r) => (kept = r))
   const whole = dl.whole.then(
@@ -189,7 +286,7 @@ export async function findDetector(o: FindOptions = {}): Promise<Found> {
     },
   )
   const bytes = index!.index.bytes ?? index!.index.pieces?.reduce((s, p) => s + p.bytes, 0) ?? 0
-  return { ...NONE, detector: onDevice('published', { first: dl.first, whole }), published: { from: 'download', bytes, kept: keptP } }
+  return { ...NONE, gpu, detector: onDevice('published', gpu, { first: dl.first, whole }, runtime), published: { from: 'download', bytes, kept: keptP } }
 }
 
 /**
@@ -202,8 +299,9 @@ export async function addDetectorFile(file: Blob): Promise<{ detector: Detector 
   await readDetectorFile(bytes)
   const kept = await keepAdded(bytes, file instanceof File ? file.name : 'detector')
   await setGuessOff(false)
-  if (!(await webgpuOffered())) return { detector: null, kept, notOffered: true }
-  return { detector: onDevice('added', { whole: Promise.resolve(bytes) }), kept, notOffered: false }
+  const gpu = await webgpuOffered()
+  const graphFrom = publishedIndex().then((at) => (at && at !== 'unreachable' ? at : null))
+  return { detector: onDevice('added', gpu, { whole: Promise.resolve(bytes) }, () => loadRuntime(graphFrom, {})), kept, notOffered: false }
 }
 
 /** Remove the added detector file from this device. */

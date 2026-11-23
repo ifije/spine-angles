@@ -8,3 +8,6 @@ coverage/
 # repository (scripts/publish_detector.py puts it there); a detector file anywhere else is never added.
 spine-detector*
 !/public/detector/spine-detector-*.bin
+!/public/detector/spine-detector-*.graph.onnx
+# The processor's runtime, copied from node_modules by scripts/copy_runtime.mjs at every build.
+public/ort/

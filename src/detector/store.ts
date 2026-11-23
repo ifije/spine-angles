@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Wolfray Applied Technologies, LLC
 
 // Detector files kept on this device (IndexedDB): the built-in detector, downloaded once and kept by its content stamp,
-// and a detector file the user added. Nothing else is kept here: never a photo. Every call is wrapped: where storage is
+// a detector file the user added, and (only where the slower way is needed) the processor runtime's files. Nothing else is kept here: never a photo. Every call is wrapped: where storage is
 // refused or missing (a private window, a full device) the app works without it. The store is not opened at all until
 // something has been kept in it on this device.
 
@@ -10,11 +10,12 @@ const DB = 'spine-angles'
 const STORE = 'detector'
 const WAIT = 4000
 
-/** 'file': a detector file the user added; 'published': the built-in detector, as downloaded from beside the app. */
-export type Slot = 'file' | 'published'
+/** 'file': a detector file the user added; 'published': the built-in detector, as downloaded from beside the app;
+ *  'runtime': the slower way's files (the processor runtime, its worker, the network's graph). */
+export type Slot = 'file' | 'published' | 'runtime'
 
 /** Remembered beside the store, so that the store is only opened (or made) once something was kept in it. */
-const FLAG: Record<Slot, string> = { file: 'spine-angles:detector-file', published: 'spine-angles:detector-kept' }
+const FLAG: Record<Slot, string> = { file: 'spine-angles:detector-file', published: 'spine-angles:detector-kept', runtime: 'spine-angles:runtime-kept' }
 
 export interface Kept {
   bytes: ArrayBuffer
@@ -122,6 +123,28 @@ export async function keep(slot: Slot, bytes: ArrayBuffer, name: string, stamp?:
     // Not offered.
   }
   return true
+}
+
+/** Several files kept together under one stamp (the slower way's). */
+export interface KeptFiles {
+  files: Record<string, ArrayBuffer>
+  stamp: string
+  added: string
+}
+
+/** The files kept in a slot, or null. */
+export async function loadFiles(slot: Slot): Promise<KeptFiles | null> {
+  if (typeof indexedDB === 'undefined' || !(await mayHave(slot))) return null
+  const kept = await run<KeptFiles>('readonly', (s) => s.get(slot))
+  return kept && kept.files && Object.values(kept.files).every((b) => b instanceof ArrayBuffer) ? kept : null
+}
+
+/** Keep several files in a slot under one stamp (replacing what was there). False if this browser would not keep them. */
+export async function keepFiles(slot: Slot, files: Record<string, ArrayBuffer>, stamp: string): Promise<boolean> {
+  if (typeof indexedDB === 'undefined') return false
+  const ok = await run<boolean>('readwrite', (s) => s.put({ files, stamp, added: new Date().toISOString() } satisfies KeptFiles, slot))
+  if (ok) flag(slot, true)
+  return !!ok
 }
 
 /** Remove what is kept in a slot. */

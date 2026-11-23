@@ -16,6 +16,8 @@ export interface DetectorIndex {
   bytes?: number
   stamp?: string
   detector?: string
+  /** The network's graph for the slower way (ONNX Runtime on the processor), with no weights in it. */
+  graph?: { file: string; bytes: number; sha256?: string }
 }
 
 export const isIndex = (x: unknown): x is DetectorIndex => {

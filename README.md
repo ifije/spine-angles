@@ -91,18 +91,18 @@ Unlike Share, this saves the **whole photo**, including any name or date visible
 
 ### Automatic guess
 
-The app finds the main landmarks itself and leaves the checking and correcting to you. About a second after you open a photo, the femoral heads, the S1 endplate, the L4 and L1 endplates and the L1 body are placed as ordinary landmarks, and PI, PT, SS, LL, L4–S1, PI−LL and the L1 pelvic angle are shown from them.
+The app finds the main landmarks itself and leaves the checking and correcting to you. About a second after you open a photo (a few seconds in a browser without WebGPU, see below), the femoral heads, the S1 endplate, the L4 and L1 endplates and the L1 body are placed as ordinary landmarks, and PI, PT, SS, LL, L4–S1, PI−LL and the L1 pelvic angle are shown from them.
 
 - **Every guessed landmark is unchecked** until you move it or keep it. It carries a question mark (`S1?`) until then.
 - Drag any of them into place, or tap one and choose **Delete** if it is wrong (a femoral head drawn where there is none, say) or **Keep** if it is right. Moving or keeping a landmark removes its question mark, and the angles follow. **Undo** takes back the whole guess.
 - **Auto** (top bar) guesses again and replaces only the guesses you have not touched.
 - In **Save labels**, a landmark left exactly where the guess put it is recorded with `"annotator": "auto"`; everything you placed, moved or kept has `null`.
 
-**How it works.** The guess is worked out on your phone, by its graphics chip; the photo is sent nowhere. The landmark detector it needs (about 13 MB) is downloaded once, the first time the app opens, and kept on the phone; after that it is read from the phone, so the guess also works with no signal. The start screen says when it is downloading and when it is ready. A new version of the detector is downloaded once in the same way.
+**How it works.** The guess is worked out on your phone; the photo is sent nowhere. The landmark detector it needs (about 13 MB) is downloaded once, the first time the app opens, and kept on the phone; after that it is read from the phone, so the guess also works with no signal. The start screen says when it is downloading and when it is ready. A new version of the detector is downloaded once in the same way. If you open a photo before the detector is ready, a line at the top of the photo says how far the download is and the landmarks appear when it is done; if the download stops, the line says so and offers **Try again**.
 
-**It needs WebGPU**, a graphics feature of recent browsers. On an iPhone, recent versions of Safari have it and older ones may not. Where the browser does not offer it, the start screen says so in one line, nothing is downloaded and no guess is made; everything else works as usual.
+**Fast with WebGPU, slower without.** With WebGPU, a graphics feature of recent browsers, the guess runs on the phone's graphics chip and takes about a second. Without it, the app runs the same network on the phone's processor: the guess is the same, it takes a few seconds (the start screen says about how many), and the first time the app also downloads what that needs, about 4 MB more, kept on the phone like the detector. On an iPhone, Safari has WebGPU from iOS 26; on iOS 17.4 to 18 it can be switched on (Settings, Apps, Safari, Advanced, Feature Flags, WebGPU). Elsewhere a current Chrome, Edge or Safari has it. The start screen's **Make it faster** says the same. Where neither way can run, the start screen says so in one line and everything else works as usual.
 
-**Turning it off.** On the start screen, **Turn off** stops the automatic guess, stops a download in progress and removes the detector from the phone. **Turn on** downloads it again.
+**Turning it off.** On the start screen, **Turn off** stops the automatic guess, stops a download in progress and removes what it had downloaded from the phone. **Turn on** downloads it again.
 
 **Its limits.** The landmark network was trained on lateral radiographs of the lumbar spine and pelvis, and on copies of them altered to look like phone photographs of a screen (see Acknowledgements). It is meant for lateral films of a standing patient. It can be wrong, and on some photos it finds nothing. It has not been validated and is not for diagnosis: check every landmark before you use a value.
 
@@ -126,7 +126,9 @@ Vite and TypeScript, no backend. Pushing to `main` runs the tests and deploys to
 
 The on-device detector's code (a small WebGPU engine and the landmark path that reads the network's answers) lives in `src/detector/`. It is written and tested in the detector's own repository; `python3 scripts/sync_detector.py` copies it again and lists any file that has changed (`--check` only lists). The detector file's format is described in `src/detector/file.ts`.
 
-The built-in detector is the one file `public/detector/spine-detector-STAMP.bin` (the trained network, 12.7 MB), named by its content stamp, with `public/detector/index.json` naming it. `python3 scripts/publish_detector.py FILE` puts a new detector file there and removes the old one; the app then downloads the new one once. The service worker's offline copy leaves `detector/` out: the app keeps the detector itself. No other trained numbers are in this repository; the tests use a tiny made-up detector file.
+The built-in detector is the one file `public/detector/spine-detector-STAMP.bin` (the trained network, 12.7 MB), named by its content stamp, with `public/detector/index.json` naming it, and beside it the network's graph for the slower way (`spine-detector-STAMP.graph.onnx`, 34 kB, no weights in it: on the device the weights are unpacked from the detector file). `python3 scripts/publish_detector.py FILE` puts a new detector file (and its graph) there and removes the old one; the app then downloads the new one once. No other trained numbers are in this repository; the tests use a tiny made-up detector file.
+
+The slower way runs ONNX Runtime Web's processor-only build (the exact version in `package.json`), copied from `node_modules` into `public/ort/` by `scripts/copy_runtime.mjs` before every build (not tracked), with its wasm also compressed. The app fetches it, and its own worker (`src/detector/cpu-worker.ts`), only on a device that cannot run the WebGPU engine, and keeps them on the device. The service worker's offline copy leaves `detector/`, `ort/` and that worker out: the app keeps them itself.
 
 `SPINE_ANGLES_TEST_BUILD=1 npm run build` makes a build with no offline mode and no install prompt, for a host that serves the detector in pieces (`detector/index.json` can name pieces instead of one file).
 
@@ -150,6 +152,8 @@ The landmark network behind the automatic guess was trained on two sets of radio
 - **Sagittal pelvic radiographs of Chai et al.** (femoral head and sacral plate landmarks): the images, "Sagittal Pelvic Radiographs: A Dataset for Clinical Quantification of Radiographic Annotation Accuracy", figshare, https://doi.org/10.6084/m9.figshare.23820879.v1 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), and the annotations, "Data records for Clinical Quantification of Radiographic Annotation Accuracy", figshare, https://doi.org/10.6084/m9.figshare.23831553.v1 (CC0). Described in: Chai Y., Boudali A.M., Maes V., Walter W.L., "Clinical benchmark dataset for AI accuracy analysis: quantifying radiographic annotation of pelvic tilt", *Scientific Data* 2024, 11, 1162. https://doi.org/10.1038/s41597-024-04003-7
 
 The network's backbone started from ImageNet-pretrained ResNet-18 weights (torchvision's ResNet-18, as provided by [segmentation_models_pytorch](https://github.com/qubvel-org/segmentation_models.pytorch)). None of these images are part of this app or repository; only the trained network is.
+
+In a browser without WebGPU the network runs on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (version 1.31.1, processor-only build), Copyright (c) Microsoft Corporation, under the MIT License; its licence text is served with it (`ort/LICENSE.txt`) and at the top of its main file.
 
 **Burapha University and the datasets' authors have not reviewed or endorsed this app.**
 

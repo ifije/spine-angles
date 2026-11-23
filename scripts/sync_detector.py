@@ -30,6 +30,7 @@ FILES = {
     "src/detector/img.mjs": "phone/web/js/img.mjs",
     "src/detector/order.mjs": "phone/web/js/order.mjs",
     "src/detector/decode.mjs": "phone/web/js/decode.mjs",
+    "src/detector/unpack.mjs": "phone/web/js/unpack.mjs",
     "src/detector/backend-engine.mjs": "phone/web/js/backend-engine.mjs",
     "src/detector/hand/engine.mjs": "phone/engine15/js/engine.mjs",
     "src/detector/hand/backend-hand.mjs": "phone/engine15/js/backend-hand.mjs",

@@ -48,6 +48,16 @@
             <span id="auto-bar" hidden><span class="track"><span class="fill"></span></span></span>
             <button id="btn-auto-toggle" class="small" hidden>Turn off</button>
           </p>
+          <details id="faster" class="more" hidden>
+            <summary>Make it faster</summary>
+            <div class="more-body">
+              <p>The fast way needs WebGPU, a graphics feature of recent browsers:</p>
+              <ul>
+                <li><b>iPhone or iPad:</b> iOS 26 or later has it. On iOS 17.4 to 18 it can be switched on: Settings, Apps, Safari, Advanced, Feature Flags, WebGPU (on iOS 17 without “Apps”). Then open the app again.</li>
+                <li><b>Elsewhere:</b> a current Chrome, Edge or Safari.</li>
+              </ul>
+            </div>
+          </details>
           <details id="credits" class="more">
             <summary>Credits</summary>
             <div class="more-body">
@@ -57,6 +67,7 @@
                 <li>Sagittal pelvic radiographs of <b>Chai et al.</b>: the images (figshare, <a href="https://doi.org/10.6084/m9.figshare.23820879.v1" target="_blank" rel="noopener">doi:10.6084/m9.figshare.23820879.v1</a>, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>) and their annotations (<a href="https://doi.org/10.6084/m9.figshare.23831553.v1" target="_blank" rel="noopener">doi:10.6084/m9.figshare.23831553.v1</a>, CC0), described in Chai Y., Boudali A.M., Maes V., Walter W.L., <i>Scientific Data</i> 2024, <a href="https://doi.org/10.1038/s41597-024-04003-7" target="_blank" rel="noopener">doi:10.1038/s41597-024-04003-7</a>.</li>
               </ul>
               <p>The network's backbone started from ImageNet-pretrained ResNet-18 weights (torchvision's ResNet-18, as provided by segmentation_models_pytorch). None of these images are part of the app.</p>
+              <p>In a browser without WebGPU the network runs on <a href="https://github.com/microsoft/onnxruntime" target="_blank" rel="noopener">ONNX Runtime Web</a>, Copyright (c) Microsoft Corporation, MIT License.</p>
               <p><b>Burapha University and the datasets' authors have not reviewed or endorsed this app.</b></p>
             </div>
           </details>
@@ -71,6 +82,15 @@
             </div>
           </details>
         </section>
+
+        <div id="wait-line" hidden role="status" aria-live="polite">
+          <span id="wait-text"></span>
+          <span id="wait-bar" hidden><span class="track"><span class="fill"></span></span></span>
+          <span class="wait-actions">
+            <button id="btn-wait-retry" class="small" hidden>Try again</button>
+            <button id="btn-wait-close" class="small" hidden aria-label="Close">✕</button>
+          </span>
+        </div>
 
         <div id="hint" hidden>
           <span id="hint-text"></span>

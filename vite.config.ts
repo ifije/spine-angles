@@ -37,9 +37,11 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
         // The built-in detector (13 MB) is not part of the offline copy: the app downloads it once and keeps it itself.
-        globIgnores: ['detector/**'],
+        globIgnores: ['detector/**', 'ort/**', 'assets/cpu-worker-*.js'],
       },
     }),
   ],
+  // The slower way's worker is a module of its own (fetched and kept with the runtime, only where it is needed).
+  worker: { format: 'es' },
   test: { include: ['tests/**/*.test.ts'] },
 })

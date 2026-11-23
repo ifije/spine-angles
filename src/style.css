@@ -57,6 +57,7 @@ button {
 }
 button:active { filter: brightness(1.3); }
 button:disabled { opacity: 0.4; }
+#btn-auto.busy:disabled { opacity: 0.9; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 button.on { border-color: var(--accent); color: var(--accent); }
 button.danger { color: var(--danger); }
@@ -70,12 +71,16 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
-#top button { padding: 0 10px; }
+#top button { padding: 0 10px; white-space: nowrap; }
 .spacer { flex: 1; }
 /* Phone width: with the Auto button shown, Share still fits on the bar (without it, nothing changes). */
 @media (max-width: 430px) {
   #top:has(#btn-auto:not([hidden])) { gap: 4px; }
   #top:has(#btn-auto:not([hidden])) button { padding: 0 8px; }
+}
+@media (max-width: 380px) {
+  #top:has(#btn-auto:not([hidden])) { gap: 3px; padding-left: calc(env(safe-area-inset-left) + 6px); padding-right: calc(env(safe-area-inset-right) + 6px); }
+  #top:has(#btn-auto:not([hidden])) button { padding: 0 6px; }
 }
 
 #stage {
@@ -161,12 +166,37 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
   -webkit-backdrop-filter: blur(8px);
 }
 #hint-text { flex: 1; font-size: 14px; }
+
+/* The automatic guess's line on the photo screen: it stays while the guess waits, runs or failed. */
+#wait-line {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px 8px 12px;
+  background: rgba(21, 24, 29, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.35;
+  z-index: 2;
+}
+#wait-text { flex: 1 1 200px; }
+#wait-bar { flex-basis: 100%; display: flex; }
+#wait-bar .track { flex: 1; height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+#wait-bar .fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+.wait-actions { display: flex; gap: 6px; margin-left: auto; }
+.wait-actions button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
 #hint-actions { display: flex; gap: 6px; flex-shrink: 0; }
 #hint-actions button { min-height: 44px; }
 
 #toast {
   position: absolute;
-  top: 12px;
+  top: calc(12px + var(--wait-h, 0px));
   left: 50%;
   transform: translateX(-50%);
   max-width: 90%;
