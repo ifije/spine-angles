@@ -17,7 +17,7 @@ const SAG_LINES: Partial<Record<FeatureId, Plate>> = {
   s1: ['S1', 'sup'], l4: ['L4', 'sup'], l1: ['L1', 'sup'], t12: ['T12', 'inf'],
   t4: ['T4', 'sup'], t1: ['T1', 'sup'], c7: ['C7', 'inf'], c2: ['C2', 'inf'],
 }
-const SAG_POINTS: Partial<Record<FeatureId, string>> = { l1c: 'L1_center', t1c: 'T1_center', c7c: 'C7_center' }
+const SAG_POINTS: Partial<Record<FeatureId, string>> = { l1c: 'L1_center', t4c: 'T4_center', t1c: 'T1_center', c7c: 'C7_center' }
 const HEADS: Partial<Record<FeatureId, string>> = { fh1: 'femoral_head_a', fh2: 'femoral_head_b' }
 /**
  * Coronal lines. The two ends are exported as `<stem>_l` and `_r` by IMAGE side. Where the

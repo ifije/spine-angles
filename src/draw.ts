@@ -222,7 +222,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, M: Mat, doc: Doc, o: 
         arcLabel(m, Math.atan2(n.y, n.x), dir(m, h), Math.max(hm * 0.35, 22 * k), C_PELVIS, text('PI'))
       }
       // Radii scale with the pelvis so the arcs stay apart, and clear of the femoral head circle.
-      for (const [key, id, frac, min] of [['L1PA', 'l1c', 0.68, 40], ['TPA', 't1c', 0.86, 54]] as const) {
+      for (const [key, id, frac, min] of [['L1PA', 'l1c', 0.68, 40], ['T4PA', 't4c', 0.77, 47], ['TPA', 't1c', 0.86, 54]] as const) {
         if (!show(key)) continue
         const c = S(F[id]![0])
         seg(h, c, C_GUIDE, 1.2, [5, 5])

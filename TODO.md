@@ -26,6 +26,7 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] TK, T1 slope
 - [x] C2–C7 lordosis, T1S–CL
 - [x] TPA, L1PA, global tilt
+- [x] T4 pelvic angle (T4 body placed by hand), shown with its difference from L1PA
 - [x] Schwab modifiers, age-adjusted targets, Roussouly grouping by SS
 - [x] Multi-curve coronal Cobb (add as many Cobb measurements as needed)
 

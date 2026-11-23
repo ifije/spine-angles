@@ -38,7 +38,7 @@ Everything happens on your device. Photos are not uploaded, and no photo is kept
 
 Tap **Guided**, choose **Sagittal** or **Coronal**, then tap the measurement you want. The app asks only for the landmarks that measurement needs, and reuses any you have already placed.
 
-- **Sagittal:** PI, PT, SS, LL, L4–S1, PI−LL, thoracic kyphosis (T4–T12), L1 pelvic angle, T1 pelvic angle, global tilt, T1 slope, C2–C7 lordosis, T1S−CL.
+- **Sagittal:** PI, PT, SS, LL, L4–S1, PI−LL, thoracic kyphosis (T4–T12), L1 pelvic angle, T4 pelvic angle, T1 pelvic angle, global tilt, T1 slope, C2–C7 lordosis, T1S−CL.
 - **Coronal:** Cobb for the proximal thoracic, main thoracic, thoracolumbar/lumbar and lumbosacral fractional curves; pelvic obliquity; T1 tilt.
 
 On sagittal endplates, tap the **anterior corner first**; that tells the app which way the patient faces. If it guesses wrong, use the **Facing** button in Results. On coronal films the order does not matter, and sides are reported as "higher on image left/right".

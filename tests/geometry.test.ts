@@ -87,12 +87,13 @@ function model(): { f: Features; expected: Record<string, number> } {
     c7: endplate({ x: 475, y: 240 }, 26),
     c2: endplate({ x: 520, y: 120 }, 8),
     l1c: [up(hip, 4 - PT, 320)],
+    t4c: [up(hip, 9 - PT, 640)],
     t1c: [up(hip, 12 - PT, 760)],
     c7c: [up(s1mid, 9 - PT, 780)],
   }
   const expected = {
     PI: SS + PT, PT, SS, LL: 58, L4S1: 35, LDI: (35 / 58) * 100, 'PI-LL': -3, TK: 43,
-    L1PA: 4, TPA: 12, GT: 9, T1S: 30, CL: 18, 'T1S-CL': 12,
+    L1PA: 4, T4PA: 9, TPA: 12, GT: 9, T1S: 30, CL: 18, 'T1S-CL': 12,
   }
   return { f, expected }
 }

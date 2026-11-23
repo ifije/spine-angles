@@ -6,7 +6,7 @@
 import { Pt, mid, norm180, endplateSlope, tiltFromVertical, pelvicIncidence, rot, cobbAngle, slopeInfo } from './geometry'
 
 export type FeatureId =
-  | 'fh1' | 'fh2' | 's1' | 'l4' | 'l1' | 'l1c' | 't12' | 't4' | 't1' | 't1c' | 'c7' | 'c7c' | 'c2'
+  | 'fh1' | 'fh2' | 's1' | 'l4' | 'l1' | 'l1c' | 't12' | 't4' | 't4c' | 't1' | 't1c' | 'c7' | 'c7c' | 'c2'
   // coronal
   | 'po' | 'ct1' | 'ptU' | 'ptL' | 'mtU' | 'mtL' | 'tlU' | 'tlL' | 'frU' | 'frL'
 
@@ -54,6 +54,7 @@ export const FEATURES: FeatureDef[] = [
   point('l1c', 'L1', 'L1 body'),
   line('t12', 'T12', 'T12 inferior endplate'),
   line('t4', 'T4', 'T4 superior endplate'),
+  point('t4c', 'T4', 'T4 body'),
   line('t1', 'T1', 'T1 superior endplate'),
   point('t1c', 'T1', 'T1 body'),
   line('c7', 'C7', 'C7 inferior endplate'),
@@ -97,6 +98,7 @@ export const MEASURE_GROUPS: { plane: Plane; title: string; items: MeasureDef[] 
   { plane: 'sagittal', title: 'Thoracic', items: [{ key: 'TK', label: 'TK T4–T12', needs: ['t12', 't4'] }] },
   { plane: 'sagittal', title: 'Global', items: [
     { key: 'L1PA', label: 'L1PA', needs: [...PELVIS, 'l1c'] },
+    { key: 'T4PA', label: 'T4PA', needs: [...PELVIS, 't4c'] },
     { key: 'TPA', label: 'TPA', needs: [...PELVIS, 't1c'] },
     { key: 'GT', label: 'Global tilt', needs: [...PELVIS, 'c7c'] },
   ] },
@@ -239,6 +241,12 @@ export function compute(raw: Features, opts: ComputeOptions = {}): SagittalResul
   if (hip && sacrum && has('l1c')) {
     const v = norm180(tiltFromVertical(hip, f.l1c![0], facing) + pt!)
     push('L1PA', 'L1 pelvic angle', v, `expected ≈ ${fmt(0.5 * pi! - 21)} (0.5 × PI − 21)`)
+  }
+  if (hip && sacrum && has('t4c')) {
+    const v = norm180(tiltFromVertical(hip, f.t4c![0], facing) + pt!)
+    // The T4-L1-hip axis is read from the two together, so the difference is shown when L1PA is there.
+    const l1pa = has('l1c') ? norm180(tiltFromVertical(hip, f.l1c![0], facing) + pt!) : undefined
+    push('T4PA', 'T4 pelvic angle', v, l1pa === undefined ? undefined : `T4PA − L1PA = ${fmt(v - l1pa)}`)
   }
   if (hip && sacrum && has('t1c')) {
     push('TPA', 'T1 pelvic angle', norm180(tiltFromVertical(hip, f.t1c![0], facing) + pt!), 'target < 14°')
