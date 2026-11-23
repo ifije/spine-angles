@@ -51,8 +51,12 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] One plain line when the browser has no WebGPU
 - [ ] Try the on-device guess on a real iPhone in Safari, installed and not (does Safari offer WebGPU there?)
 - [ ] A way to guess without WebGPU (the processor), if Safari needs it
-- [ ] Decide how the detector file reaches users, and whether the detector's code is published
-- [ ] T4 pelvic angle as a guided measurement; check L1 pelvic angle from the guess against hand-placed landmarks
+- [x] The detector's code is published with the app (2026-11-23); the detector file is not
+- [ ] Decide how the detector file reaches users
+- [x] T4 pelvic angle as a guided measurement (T4 body placed by hand)
+- [x] Guided: each measurement shows the landmarks it needs, which are placed, guessed or missing, and places the missing ones
+- [ ] Check L1 pelvic angle from the guess against hand-placed landmarks
+- [ ] Find the T4 body automatically (needs films with the thoracic spine marked)
 
 ## Phase 3 — Install and deploy
 - [x] Manifest, icons, service worker with versioned cache
