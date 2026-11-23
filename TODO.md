@@ -51,8 +51,9 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] One plain line when the browser has no WebGPU
 - [ ] Try the on-device guess on a real iPhone in Safari, installed and not (does Safari offer WebGPU there?)
 - [ ] A way to guess without WebGPU (the processor), if Safari needs it
-- [x] The detector's code is published with the app (2026-11-23); the detector file is not
-- [ ] Decide how the detector file reaches users
+- [x] The detector's code is published with the app (2026-11-23)
+- [x] The trained detector is published with the app (0.4.0): downloaded once in the background, kept on the device by its stamp, works offline, replaced when a new one is published; one switch to turn it off and on; Credits on the start screen and Acknowledgements in the README
+- [ ] Check the first download and offline use on a real iPhone (installed and not), and how long the first download takes there
 - [x] T4 pelvic angle as a guided measurement (T4 body placed by hand)
 - [x] Guided: each measurement shows the landmarks it needs, which are placed, guessed or missing, and places the missing ones
 - [ ] Check L1 pelvic angle from the guess against hand-placed landmarks

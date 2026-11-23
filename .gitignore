@@ -4,6 +4,7 @@ dev-dist/
 coverage/
 *.log
 .DS_Store
-# A detector file holds a trained network: never part of this repository.
-public/detector/
+# A detector file holds a trained network. Only the built-in one, published in public/detector/, belongs in this
+# repository (scripts/publish_detector.py puts it there); a detector file anywhere else is never added.
 spine-detector*
+!/public/detector/spine-detector-*.bin

@@ -7,7 +7,7 @@
 // (file.ts), which this app does not include. The photo never leaves the page: it is read from the app's canvas, turned
 // grey and handed to the engine.
 //
-//   const d = startDetector({ from: 'added', whole: bytes })   // or a file arriving in pieces: { first, whole }
+//   const d = startDetector({ from: 'added', whole: bytes })   // or a file still arriving: { first, whole }
 //   await d.ready                                              // engine started once, self-tested, both looks warmed up
 //   const record = await d.guess(canvas)                       // a "spine-labels/1" record, in the canvas's pixels
 //   d.end()
@@ -18,7 +18,7 @@ import { prepare, release, makeBackend, type EngineBackend, type EngineNet, type
 import { readDetectorFile, readEarly, type DetectorParts } from './file'
 import { toGuessRecord, type GuessRecord } from './record'
 
-export { readDetectorFile, DetectorFileError } from './file'
+export { readDetectorFile, readHeader, DetectorFileError } from './file'
 export type { GuessRecord } from './record'
 
 /** The self-test's bar: the largest difference from the expected answers, as a share of their range (as the engine's backend). */
@@ -43,11 +43,11 @@ export async function webgpuOffered(): Promise<boolean> {
 export class NotOffered extends Error {}
 
 export interface DetectorSource {
-  /** 'added': a file the user added (kept on this device); 'beside': a file served beside the app. */
-  from: 'added' | 'beside'
+  /** 'added': a file the user added (kept on this device); 'published': the built-in detector, published beside the app. */
+  from: 'added' | 'published'
   /** The whole file. */
   whole: Promise<ArrayBuffer>
-  /** Its first piece, when it comes in pieces: the engine is prepared from it while the rest arrives. */
+  /** Its first part (all but the weights), while the rest is still arriving: the engine is prepared from it meanwhile. */
   first?: Promise<Uint8Array>
 }
 
@@ -63,7 +63,7 @@ export interface ReadyInfo {
 }
 
 export interface DeviceDetector {
-  from: 'added' | 'beside'
+  from: 'added' | 'published'
   /** Resolves once the engine is started, self-tested and warmed up; rejects with NotOffered if it cannot run here. */
   ready: Promise<ReadyInfo>
   /** The guess for the photo on `photo` (its pixels are the record's). */

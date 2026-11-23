@@ -44,10 +44,32 @@
             <li>Approximate measurements for convenience, not for diagnostic use.</li>
           </ul>
           <p id="auto-line">
-            <span id="auto-text">Automatic landmark guess: off.</span>
-            <button id="btn-detector-add" class="small">Add detector file</button>
-            <button id="btn-detector-remove" class="small" hidden>Remove detector file</button>
+            <span id="auto-text">Automatic landmark guess: getting ready…</span>
+            <span id="auto-bar" hidden><span class="track"><span class="fill"></span></span></span>
+            <button id="btn-auto-toggle" class="small" hidden>Turn off</button>
           </p>
+          <details id="credits" class="more">
+            <summary>Credits</summary>
+            <div class="more-body">
+              <p>The automatic guess uses a landmark network that was trained on two sets of radiographs:</p>
+              <ul>
+                <li>Lateral lumbar spine films of the <b>Burapha Spine Dataset (BUU-LSPINE)</b>, Faculty of Informatics, Burapha University, Thailand (<a href="https://services.informatics.buu.ac.th/spine/" target="_blank" rel="noopener">services.informatics.buu.ac.th/spine</a>). Klinwichit P. et al., “BUU-LSPINE: A Thai Open Lumbar Spine Dataset for Spondylolisthesis Detection”, <i>Applied Sciences</i> 2023, 13(15), 8646, <a href="https://doi.org/10.3390/app13158646" target="_blank" rel="noopener">doi:10.3390/app13158646</a>.</li>
+                <li>Sagittal pelvic radiographs of <b>Chai et al.</b>: the images (figshare, <a href="https://doi.org/10.6084/m9.figshare.23820879.v1" target="_blank" rel="noopener">doi:10.6084/m9.figshare.23820879.v1</a>, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>) and their annotations (<a href="https://doi.org/10.6084/m9.figshare.23831553.v1" target="_blank" rel="noopener">doi:10.6084/m9.figshare.23831553.v1</a>, CC0), described in Chai Y., Boudali A.M., Maes V., Walter W.L., <i>Scientific Data</i> 2024, <a href="https://doi.org/10.1038/s41597-024-04003-7" target="_blank" rel="noopener">doi:10.1038/s41597-024-04003-7</a>.</li>
+              </ul>
+              <p>The network's backbone started from ImageNet-pretrained ResNet-18 weights (torchvision's ResNet-18, as provided by segmentation_models_pytorch). None of these images are part of the app.</p>
+              <p><b>Burapha University and the datasets' authors have not reviewed or endorsed this app.</b></p>
+            </div>
+          </details>
+          <details id="own-detector" class="more">
+            <summary>Use a different detector file</summary>
+            <div class="more-body">
+              <p id="own-text">If you have a detector file of your own, add it here. It is kept on this device and used instead of the built-in one.</p>
+              <p class="more-actions">
+                <button id="btn-detector-add" class="small">Add detector file</button>
+                <button id="btn-detector-remove" class="small" hidden>Remove your detector file</button>
+              </p>
+            </div>
+          </details>
         </section>
 
         <div id="hint" hidden>

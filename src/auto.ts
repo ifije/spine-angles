@@ -4,34 +4,67 @@
 // Automatic guess: landmarks found by a detector, placed as guesses for the user to drag, keep or delete. The app looks
 // for a detector in this order:
 //   1. a detector file the user added ("Add detector file"), kept on this device: the guess is worked out on this device;
-//   2. a detector file beside the app (detector/index.json naming the file or its pieces), only in a build made to look
-//      for one (SPINE_ANGLES_TEST_BUILD=1): likewise worked out on this device;
+//   2. the built-in detector, published beside the app (detector/index.json names the file, or its pieces for a host
+//      that limits a file's size): downloaded once in the background, kept on this device by its content stamp, read
+//      from there on every later opening (no request for the file, and it works with no connection), downloaded again
+//      only when index.json names a new stamp; worked out on this device;
 //   3. a detector service the user runs on their own machine, which is sent the photo and answers with landmarks.
-// Each answers with a record in the "spine-labels/1" format. Without any of them the app behaves exactly as before and
-// nothing leaves the device.
+// Each answers with a record in the "spine-labels/1" format. The user can turn the automatic guess off (remembered): then
+// nothing is downloaded, the kept copy of the built-in detector is removed, and no detector of any kind is asked.
 
-import { readDetectorFile, startDetector, webgpuOffered, type DeviceDetector, type GuessRecord } from './detector'
-import { keepAdded, loadAdded, removeAdded } from './detector/store'
+import { readDetectorFile, readHeader, startDetector, webgpuOffered, type DeviceDetector, type GuessRecord } from './detector'
+import { download, isIndex, type DetectorIndex } from './detector/download'
+import { drop, keep, keepAdded, loadAdded, loadKept, removeAdded } from './detector/store'
 
 export { NotOffered, DetectorFileError } from './detector'
+export { DownloadError } from './detector/download'
 export type { GuessRecord } from './detector'
 
-export type Detector = { kind: 'service'; base: string } | { kind: 'device'; from: 'added' | 'beside'; device: DeviceDetector }
+export type Detector = { kind: 'service'; base: string } | { kind: 'device'; from: 'added' | 'published'; device: DeviceDetector }
 
 export interface Found {
   detector: Detector | null
-  /** A detector file is here, but this browser cannot run it (no WebGPU). */
+  /** A detector is here, but this browser cannot run it (no WebGPU): nothing is downloaded. */
   notOffered: boolean
   /** The user has added a detector file, kept on this device. */
   added: boolean
+  /** The user turned the automatic guess off. */
+  off: boolean
+  /** The built-in detector this time: read from this device, or being downloaded (its size), and whether it is kept. */
+  published: null | { from: 'store' | 'download'; bytes: number; kept: Promise<boolean> }
+  /** The built-in detector could not be reached and none is kept (no connection): it is tried again next time. */
+  later: boolean
 }
 
 const KEY = 'spine-angles:detector'
+const OFF = 'spine-angles:auto-guess'
 const SERVICE = 'spine-guess'
-/** Where a build made for it looks for a detector file served beside the app. */
-const BESIDE = 'detector/index.json'
+/** Where the built-in detector is published, beside the app. */
+const INDEX = 'detector/index.json'
 
 const withSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
+
+/** Whether the user turned the automatic guess off (remembered on this device). */
+export function guessOff(): boolean {
+  try {
+    return localStorage.getItem(OFF) === 'off'
+  } catch {
+    return sessionOff
+  }
+}
+let sessionOff = false
+
+/** Turn the automatic guess off (the kept copy of the built-in detector is removed) or on again. */
+export async function setGuessOff(off: boolean): Promise<void> {
+  sessionOff = off
+  try {
+    if (off) localStorage.setItem(OFF, 'off')
+    else localStorage.removeItem(OFF)
+  } catch {
+    // Not remembered: for this session only.
+  }
+  if (off) await drop('published')
+}
 
 async function healthy(base: string): Promise<boolean> {
   const ctl = new AbortController()
@@ -70,88 +103,105 @@ export async function findService(): Promise<string | null> {
   return null
 }
 
-interface BesideIndex {
-  /** One file, or the pieces that joined make it (for a host with a limit on a file's size). */
-  file?: string
-  pieces?: { name: string; bytes: number }[]
-  bytes?: number
-}
-
-/** The detector file beside the app: its index, or null if there is none. */
-async function besideIndex(): Promise<{ url: URL; index: BesideIndex } | null> {
+/** The built-in detector's index: the index, null if none is published here, or 'unreachable' (no connection). */
+async function publishedIndex(): Promise<{ url: URL; index: DetectorIndex } | null | 'unreachable'> {
   // (resolved as the page's own relative addresses are, which also holds where a host gives the page a base address)
-  const url = new URL(BESIDE, document.baseURI)
+  const url = new URL(INDEX, document.baseURI)
+  let res: Response
   try {
-    const res = await fetch(url, { cache: 'no-cache' })
+    res = await fetch(url, { cache: 'no-cache' })
+  } catch {
+    return 'unreachable'
+  }
+  try {
     if (!res.ok) return null
-    const index = (await res.json()) as BesideIndex
-    return index && (typeof index.file === 'string' || (Array.isArray(index.pieces) && index.pieces.length)) ? { url, index } : null
+    const index = await res.json()
+    return isIndex(index) ? { url, index } : null
   } catch {
     return null
   }
 }
 
-async function fetchBytes(url: URL): Promise<ArrayBuffer> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error('the detector file beside the app could not be fetched')
-  return res.arrayBuffer()
-}
-
-/** The file beside the app, fetched: its first piece early (the engine is prepared from it), then the whole. */
-function fetchBeside(at: { url: URL; index: BesideIndex }): { first?: Promise<Uint8Array>; whole: Promise<ArrayBuffer> } {
-  const { url, index } = at
-  if (index.file) return { whole: fetchBytes(new URL(index.file, url)) }
-  const parts = index.pieces!.map((p) => fetchBytes(new URL(p.name, url)))
-  const whole = Promise.all(parts).then((got) => {
-    const n = got.reduce((s, b) => s + b.byteLength, 0)
-    if (index.bytes !== undefined && n !== index.bytes) throw new Error('the detector file beside the app arrived incomplete')
-    const all = new Uint8Array(n)
-    let at = 0
-    for (const b of got) {
-      all.set(new Uint8Array(b), at)
-      at += b.byteLength
-    }
-    return all.buffer
-  })
-  return { first: parts[0].then((b) => new Uint8Array(b)), whole }
-}
-
-const onDevice = (from: 'added' | 'beside', src: { first?: Promise<Uint8Array>; whole: Promise<ArrayBuffer> }): Detector => {
+const onDevice = (from: 'added' | 'published', src: { first?: Promise<Uint8Array>; whole: Promise<ArrayBuffer> }): Detector => {
+  // (a download that fails is reported through `ready`; the bytes' own promise is then never waited for)
+  src.whole.catch(() => {})
   const device = startDetector({ from, ...src })
   device.ready.catch(() => {})
   return { kind: 'device', from, device }
 }
 
+const NONE: Found = { detector: null, notOffered: false, added: false, off: false, published: null, later: false }
+
+async function orService(found: Partial<Found>): Promise<Found> {
+  const base = await findService()
+  return { ...NONE, ...found, detector: base ? { kind: 'service', base } : null }
+}
+
+export interface FindOptions {
+  /** Called as the built-in detector downloads: bytes so far, bytes in all. */
+  progress?: (got: number, total: number) => void
+  /** Stops the download. */
+  signal?: AbortSignal
+}
+
 /**
  * The detector to use, in the order above. A detector file is started at once (its engine prepared, self-tested and
- * warmed up in the background; `device.ready` says when). Where a file is here but this browser offers no WebGPU,
- * `notOffered` is set and a service is still looked for.
+ * warmed up in the background; `device.ready` says when, after the download if there is one). Where a detector is here
+ * but this browser offers no WebGPU, `notOffered` is set, nothing is downloaded and a service is still looked for.
  */
-export async function findDetector(): Promise<Found> {
+export async function findDetector(o: FindOptions = {}): Promise<Found> {
+  if (guessOff()) return { ...NONE, off: true }
   const added = await loadAdded()
-  let notOffered = false
   if (added) {
-    if (await webgpuOffered()) return { detector: onDevice('added', { whole: Promise.resolve(added) }), notOffered, added: true }
-    notOffered = true
-  } else if (__DETECTOR_BESIDE__) {
-    const beside = await besideIndex()
-    if (beside) {
-      if (await webgpuOffered()) return { detector: onDevice('beside', fetchBeside(beside)), notOffered, added: false }
-      notOffered = true
-    }
+    if (await webgpuOffered()) return { ...NONE, detector: onDevice('added', { whole: Promise.resolve(added) }), added: true }
+    return orService({ notOffered: true, added: true })
   }
-  const base = await findService()
-  return { detector: base ? { kind: 'service', base } : null, notOffered, added: !!added }
+  const [at, stored] = await Promise.all([publishedIndex(), loadKept('published')])
+  const index = at && at !== 'unreachable' ? at : null
+  if (!index && !stored) return orService({ later: at === 'unreachable' })
+  if (!(await webgpuOffered())) return orService({ notOffered: true })
+  if (stored && (!index || index.index.stamp === stored.stamp)) {
+    // Kept on this device: no request for the file (and none needed with no connection).
+    return { ...NONE, detector: onDevice('published', { whole: Promise.resolve(stored.bytes) }), published: { from: 'store', bytes: stored.bytes.byteLength, kept: Promise.resolve(true) } }
+  }
+  // Not kept yet, or a new one is published: downloaded in the background, then kept by its stamp in place of the old one.
+  const dl = download(index!.index, index!.url, o)
+  let kept: (k: boolean) => void = () => {}
+  const keptP = new Promise<boolean>((r) => (kept = r))
+  const whole = dl.whole.then(
+    async (b) => {
+      let stamp = index!.index.stamp
+      try {
+        stamp = readHeader(b)?.stamp ?? stamp
+      } catch {
+        // Not a detector file: the engine's start says so.
+      }
+      const ok = await keep('published', b, index!.index.file ?? 'detector', stamp)
+      if (!ok) await drop('published')
+      kept(ok)
+      return b
+    },
+    async (e) => {
+      kept(false)
+      // An older copy is better than none until the new one can be fetched (next time).
+      if (stored && !o.signal?.aborted) return stored.bytes
+      throw e
+    },
+  )
+  const bytes = index!.index.bytes ?? index!.index.pieces?.reduce((s, p) => s + p.bytes, 0) ?? 0
+  return { ...NONE, detector: onDevice('published', { first: dl.first, whole }), published: { from: 'download', bytes, kept: keptP } }
 }
 
 /**
  * Check a detector file the user chose and keep it on this device. Throws with a plain reason if it is not one this app
- * can use. `kept` is false if this browser would not keep it (then it is used for this session only).
+ * can use. `kept` is false if this browser would not keep it (then it is used for this session only). Adding a file
+ * turns the automatic guess on.
  */
 export async function addDetectorFile(file: Blob): Promise<{ detector: Detector | null; kept: boolean; notOffered: boolean }> {
   const bytes = await file.arrayBuffer()
   await readDetectorFile(bytes)
   const kept = await keepAdded(bytes, file instanceof File ? file.name : 'detector')
+  await setGuessOff(false)
   if (!(await webgpuOffered())) return { detector: null, kept, notOffered: true }
   return { detector: onDevice('added', { whole: Promise.resolve(bytes) }), kept, notOffered: false }
 }
@@ -163,6 +213,9 @@ export const removeDetectorFile = (): Promise<boolean> => removeAdded()
 export function endDetector(d: Detector | null): void {
   if (d?.kind === 'device') d.device.end()
 }
+
+/** Remove the kept copy of the built-in detector (a damaged one: it is downloaded again). */
+export const dropPublished = (): Promise<boolean> => drop('published')
 
 async function askService(base: string, photo: HTMLCanvasElement): Promise<GuessRecord> {
   const blob = await new Promise<Blob | null>((resolve) => photo.toBlob(resolve, 'image/jpeg', 0.92))

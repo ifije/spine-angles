@@ -116,19 +116,33 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 10px;
   padding: 24px;
   text-align: center;
   background: var(--bg);
   overflow: auto;
 }
+/* Centred while it fits; scrolls from the top when an opened section makes it taller than the screen. */
+#empty > :first-child { margin-top: auto; }
+#empty > :last-child { margin-bottom: auto; }
 #empty h1 { margin: 4px 0 0; font-size: 24px; }
 #empty p { margin: 0 0 10px; color: var(--muted); }
 #empty ul { max-width: 340px; margin: 14px 0 0; padding-left: 18px; text-align: left; color: var(--muted); font-size: 13.5px; }
 #empty li { margin: 6px 0; }
 #auto-line { max-width: 340px; margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 8px; color: var(--muted); font-size: 13px; }
-#auto-line button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
+#empty button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
+#auto-bar { flex-basis: 100%; display: flex; justify-content: center; }
+#auto-bar .track { width: 200px; max-width: 70%; height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+#auto-bar .fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+#empty details.more { width: 100%; max-width: 340px; color: var(--muted); font-size: 13px; }
+#empty details.more summary { cursor: pointer; text-align: center; padding: 4px 0; }
+#empty details.more[open] summary { color: var(--text); }
+#empty .more-body { text-align: left; font-size: 12.5px; line-height: 1.45; }
+#empty .more-body p, #empty .more-body ul { margin: 6px 0; }
+#empty .more-body ul { padding-left: 18px; max-width: none; color: inherit; font-size: inherit; }
+#empty .more-body li { margin: 6px 0; }
+#empty .more-body a { color: var(--accent); overflow-wrap: anywhere; }
+#empty .more-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 #empty.drag { outline: 2px dashed var(--accent); outline-offset: -10px; }
 
 #hint {

@@ -2,15 +2,16 @@ import { defineConfig } from 'vitest/config'
 import { VitePWA } from 'vite-plugin-pwa'
 import pkg from './package.json'
 
-// A test build (SPINE_ANGLES_TEST_BUILD=1) looks for a detector file served beside the app (detector/index.json) and has
-// no offline mode: no service worker and no web app manifest, so no install prompt. The normal build is unchanged.
+// A test build (SPINE_ANGLES_TEST_BUILD=1), for a host that serves the detector file in pieces beside the app, has no
+// offline mode: no service worker and no web app manifest, so no install prompt. Both builds find the built-in detector
+// through detector/index.json.
 const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {}
 const testBuild = env.SPINE_ANGLES_TEST_BUILD === '1'
 
 export default defineConfig({
   // Relative paths so the build works from any sub-path (e.g. GitHub Pages).
   base: './',
-  define: { __APP_VERSION__: JSON.stringify(pkg.version), __DETECTOR_BESIDE__: JSON.stringify(testBuild) },
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   plugins: [
     VitePWA({
       disable: testBuild,
@@ -35,6 +36,8 @@ export default defineConfig({
         // Each release gets a new precache; caches from older releases are deleted.
         cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
+        // The built-in detector (13 MB) is not part of the offline copy: the app downloads it once and keeps it itself.
+        globIgnores: ['detector/**'],
       },
     }),
   ],

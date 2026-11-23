@@ -1,28 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Wolfray Applied Technologies, LLC
 
-// The detector file the user added, kept on this device (IndexedDB). Nothing else is kept here: never a photo. Every call
-// is wrapped: where storage is refused or missing (a private window, a full device) the app works without it, and a file
-// added then is used for that session only. The store is not even opened unless a file was added on this device.
+// Detector files kept on this device (IndexedDB): the built-in detector, downloaded once and kept by its content stamp,
+// and a detector file the user added. Nothing else is kept here: never a photo. Every call is wrapped: where storage is
+// refused or missing (a private window, a full device) the app works without it. The store is not opened at all until
+// something has been kept in it on this device.
 
 const DB = 'spine-angles'
 const STORE = 'detector'
-const KEY = 'file'
-/** Remembered beside the store, so that someone who never added a file never has a store opened (or made). */
-const FLAG = 'spine-angles:detector-file'
 const WAIT = 4000
 
-interface Kept {
+/** 'file': a detector file the user added; 'published': the built-in detector, as downloaded from beside the app. */
+export type Slot = 'file' | 'published'
+
+/** Remembered beside the store, so that the store is only opened (or made) once something was kept in it. */
+const FLAG: Record<Slot, string> = { file: 'spine-angles:detector-file', published: 'spine-angles:detector-kept' }
+
+export interface Kept {
   bytes: ArrayBuffer
   name: string
+  /** The detector file's content stamp (SHA-256, hex), where known. */
+  stamp?: string
   added: string
 }
 
-function flag(on?: boolean): boolean | null {
+function flag(slot: Slot, on?: boolean): boolean | null {
   try {
-    if (on === true) localStorage.setItem(FLAG, '1')
-    else if (on === false) localStorage.removeItem(FLAG)
-    return localStorage.getItem(FLAG) === '1'
+    if (on === true) localStorage.setItem(FLAG[slot], '1')
+    else if (on === false) localStorage.removeItem(FLAG[slot])
+    return localStorage.getItem(FLAG[slot]) === '1'
   } catch {
     return null
   }
@@ -83,9 +89,9 @@ function run<T>(mode: IDBTransactionMode, act: (s: IDBObjectStore) => IDBRequest
   )
 }
 
-/** Whether a file may have been added here (without opening the store when it is known that none was). */
-async function mayHave(): Promise<boolean> {
-  const f = flag()
+/** Whether something may have been kept in this slot (without opening the store when it is known that nothing was). */
+async function mayHave(slot: Slot): Promise<boolean> {
+  const f = flag(slot)
   if (f !== null) return f
   try {
     const list = await indexedDB.databases?.()
@@ -96,19 +102,19 @@ async function mayHave(): Promise<boolean> {
   return true
 }
 
-/** The added detector file's bytes, or null. */
-export async function loadAdded(): Promise<ArrayBuffer | null> {
-  if (typeof indexedDB === 'undefined' || !(await mayHave())) return null
-  const kept = await run<Kept>('readonly', (s) => s.get(KEY))
-  return kept && kept.bytes instanceof ArrayBuffer ? kept.bytes : null
+/** What is kept in a slot, or null. */
+export async function loadKept(slot: Slot): Promise<Kept | null> {
+  if (typeof indexedDB === 'undefined' || !(await mayHave(slot))) return null
+  const kept = await run<Kept>('readonly', (s) => s.get(slot))
+  return kept && kept.bytes instanceof ArrayBuffer ? kept : null
 }
 
-/** Keep a detector file on this device. False if this browser would not keep it. */
-export async function keepAdded(bytes: ArrayBuffer, name: string): Promise<boolean> {
+/** Keep a detector file in a slot (replacing what was there). False if this browser would not keep it. */
+export async function keep(slot: Slot, bytes: ArrayBuffer, name: string, stamp?: string): Promise<boolean> {
   if (typeof indexedDB === 'undefined') return false
-  const ok = await run<boolean>('readwrite', (s) => s.put({ bytes, name, added: new Date().toISOString() } satisfies Kept, KEY))
+  const ok = await run<boolean>('readwrite', (s) => s.put({ bytes, name, stamp, added: new Date().toISOString() } satisfies Kept, slot))
   if (!ok) return false
-  flag(true)
+  flag(slot, true)
   try {
     // Ask the browser not to clear it when space runs short; a refusal changes nothing.
     void navigator.storage?.persist?.().catch(() => {})
@@ -118,9 +124,17 @@ export async function keepAdded(bytes: ArrayBuffer, name: string): Promise<boole
   return true
 }
 
-/** Remove the added detector file from this device. */
-export async function removeAdded(): Promise<boolean> {
-  flag(false)
-  if (typeof indexedDB === 'undefined') return true
-  return (await run<boolean>('readwrite', (s) => s.delete(KEY))) === true
+/** Remove what is kept in a slot. */
+export async function drop(slot: Slot): Promise<boolean> {
+  const had = flag(slot)
+  flag(slot, false)
+  if (typeof indexedDB === 'undefined' || had === false) return true
+  return (await run<boolean>('readwrite', (s) => s.delete(slot))) === true
 }
+
+/** The added detector file's bytes, or null. */
+export const loadAdded = async (): Promise<ArrayBuffer | null> => (await loadKept('file'))?.bytes ?? null
+/** Keep the added detector file on this device. False if this browser would not keep it. */
+export const keepAdded = (bytes: ArrayBuffer, name: string): Promise<boolean> => keep('file', bytes, name)
+/** Remove the added detector file from this device. */
+export const removeAdded = (): Promise<boolean> => drop('file')

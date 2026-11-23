@@ -9,7 +9,8 @@ import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
 import { buildLabels, hasLabels, readLabels } from './labels'
 import {
-  findDetector, findService, requestGuess, addDetectorFile, removeDetectorFile, endDetector, NotOffered, DetectorFileError, type Detector, type Found,
+  findDetector, findService, requestGuess, addDetectorFile, removeDetectorFile, endDetector, dropPublished, setGuessOff,
+  NotOffered, DetectorFileError, type Detector, type Found,
 } from './auto'
 import {
   FEATURES, FEATURE_BY_ID, MEASURE_GROUPS, MEASURE_BY_KEY, FeatureId, MeasureDef, MeasureState, NeedState, Plane, Result,
@@ -81,6 +82,14 @@ let notOfferedSaid = false
 let detectorProblem: string | null = null
 /** The on-device detector has started (its self-test passed) and is waiting for photos. */
 let detectorReady = false
+/** What was found last (the built-in detector's download, whether the guess is turned off). */
+let found: Found | null = null
+/** The built-in detector's download: bytes so far and in all; whether it failed (tried again at the next opening). */
+let dlGot = 0
+let dlTotal = 0
+let dlFailed = false
+/** Whether the built-in detector is kept on this device (null: not known yet). */
+let keptHere: boolean | null = null
 /** Counts guess requests: a reply is used only if it is still the latest and for the same photo. */
 let guessToken = 0
 let guessing = false
@@ -729,7 +738,7 @@ function updateHint() {
       }))
     }
   } else if (src && guessing) {
-    text = 'Finding landmarks…'
+    text = detector?.kind === 'device' && downloading() ? `Getting the landmark detector (${mb(dlGot)} of ${mb(dlTotal)})…` : 'Finding landmarks…'
   }
   $('hint-text').textContent = text
   hint.hidden = !text
@@ -1170,44 +1179,83 @@ const hostOf = (base: string) => {
   }
 }
 
-/** Say which detector is in use (start screen), and offer to add or remove a detector file. */
+const mb = (n: number) => `${Math.max(1, Math.round(n / 1e6))} MB`
+/** The built-in detector is still downloading. */
+const downloading = () => found?.published?.from === 'download' && !detectorReady && dlTotal > 0 && dlGot < dlTotal
+
+/** Say on the start screen what the automatic guess is doing, in plain words, with its one switch. */
 function showDetector() {
   const d = detector
-  $('auto-text').textContent =
-    d?.kind === 'device'
-      ? !detectorReady ? 'Automatic landmark guess: getting ready…'
-        : d.from === 'added' ? 'Automatic landmark guess: on, with the detector file kept on this device.' : 'Automatic landmark guess: on.'
-      : notOffered ? NOT_OFFERED
-      : detectorProblem ? detectorProblem
-      : d?.kind === 'service' ? `Automatic landmark guess: on, from the detector at ${hostOf(d.base)}.`
-      : 'Automatic landmark guess: off.'
+  const off = !!found?.off
+  const size = mb(found?.published?.bytes || dlTotal || 13e6)
+  let text: string
+  if (off) text = 'Automatic landmark guess: off.'
+  else if (d?.kind === 'device') {
+    if (downloading()) text = `Automatic landmark guess: downloading the landmark detector, ${mb(dlGot)} of ${mb(dlTotal)}. This happens once; it is then kept on this device.`
+    else if (!detectorReady) text = 'Automatic landmark guess: getting ready…'
+    else if (d.from === 'added') text = 'Automatic landmark guess: on, with your own detector file.'
+    else if (keptHere === false) text = 'Automatic landmark guess: on. This browser does not let the app keep the landmark detector, so it is downloaded again each time the app opens.'
+    else text = 'Automatic landmark guess: on.'
+  } else if (notOffered) text = NOT_OFFERED
+  else if (detectorProblem) text = detectorProblem
+  else if (dlFailed) text = 'Automatic landmark guess: the landmark detector could not be downloaded. The app tries again the next time it opens.'
+  else if (found?.later) text = `Automatic landmark guess: the landmark detector (${size}) will be downloaded the next time the app opens with a connection.`
+  else if (d?.kind === 'service') text = `Automatic landmark guess: on, from the detector at ${hostOf(d.base)}.`
+  else text = 'Automatic landmark guess: off.'
+  $('auto-text').textContent = text
+  const toggle = $<HTMLButtonElement>('btn-auto-toggle')
+  // One switch: off stops the download and removes the kept copy; on fetches it again. Nothing to switch where nothing can run.
+  toggle.hidden = !off && !d && !dlFailed && !found?.later && !detectorProblem
+  toggle.textContent = off ? 'Turn on' : 'Turn off'
+  const bar = $('auto-bar')
+  bar.hidden = !(d?.kind === 'device' && downloading())
+  ;(bar.querySelector('.fill') as HTMLElement).style.width = dlTotal ? `${Math.round((100 * dlGot) / dlTotal)}%` : '0'
   $('btn-detector-add').hidden = detectorAdded
   $('btn-detector-remove').hidden = !detectorAdded
+  $('own-text').textContent = detectorAdded
+    ? 'Your own detector file is kept on this device and used instead of the built-in one.'
+    : 'If you have a detector file of your own, add it here. It is kept on this device and used instead of the built-in one.'
   $('note-privacy').textContent =
     d?.kind === 'device' ? 'Automatic guess is on: it is worked out on this device, and your photo is sent nowhere.'
       : d?.kind === 'service' ? `Automatic guess is on: each photo you open is sent to the detector at ${hostOf(d.base)} to find landmarks, and nowhere else.`
       : PRIVACY
 }
 
-/** Use what was found. A detector file whose engine cannot run here gives way to a detector service, if the user runs one. */
-function useDetector(found: Found) {
-  if (detector !== found.detector) endDetector(detector)
-  detector = found.detector
-  notOffered = found.notOffered
-  detectorAdded = found.added
+/** Use what was found. A detector whose engine cannot run here gives way to a detector service, if the user runs one. */
+function useDetector(f: Found) {
+  if (detector !== f.detector) endDetector(detector)
+  found = f
+  detector = f.detector
+  notOffered = f.notOffered
+  detectorAdded = f.added
   detectorProblem = null
   detectorReady = false
+  dlFailed = false
+  keptHere = null
   const d = detector
   if (d?.kind === 'device') {
+    f.published?.kept.then((k) => {
+      if (detector !== d) return
+      keptHere = k
+      showDetector()
+    })
     d.device.ready.then(() => {
       if (detector !== d) return
       detectorReady = true
       showDetector()
+      refresh()
     }, async (err) => {
       if (detector !== d) return
       detector = null
       if (err instanceof NotOffered) notOffered = true
-      else detectorProblem = err instanceof DetectorFileError ? err.message : `The automatic guess could not start: ${err instanceof Error ? err.message : 'it failed'}.`
+      else if (err instanceof DetectorFileError && f.published?.from === 'store' && !redownloaded) {
+        // The copy kept on this device is damaged: it is removed and the detector downloaded again, once.
+        redownloaded = true
+        await dropPublished()
+        return startFinding()
+      } else if (err instanceof DetectorFileError) detectorProblem = err.message
+      else if (f.published?.from === 'download') dlFailed = true
+      else detectorProblem = `The automatic guess could not start: ${err instanceof Error ? err.message : 'it failed'}.`
       showDetector()
       refresh()
       const base = await findService()
@@ -1223,9 +1271,51 @@ function useDetector(found: Found) {
   if (detector && src && !doc.measures.length && !Object.keys(doc.features).length) void runGuess()
 }
 
-// Only a user who added a detector file or runs a detector service has one; for everyone else this finds nothing and the
-// app is unchanged.
-void findDetector().then(useDetector)
+let redownloaded = false
+let finding: AbortController | null = null
+let shownMb = -1
+/** Look for a detector (and download the built-in one if it is not kept here yet), in the background. */
+function startFinding() {
+  finding?.abort()
+  const ctl = (finding = new AbortController())
+  dlGot = dlTotal = 0
+  void findDetector({
+    signal: ctl.signal,
+    progress: (got, total) => {
+      if (finding !== ctl) return
+      dlGot = got
+      dlTotal = total
+      const now = Math.floor(got / 1e6)
+      if (now === shownMb && got < total) return
+      shownMb = now
+      showDetector()
+      if (guessing) updateHint()
+    },
+  }).then((f) => {
+    if (finding === ctl) useDetector(f)
+  })
+}
+
+// The built-in detector is fetched once, in the background, and kept on this device; later openings read it from there.
+startFinding()
+
+$('btn-auto-toggle').addEventListener('click', async () => {
+  if (found?.off) {
+    await setGuessOff(false)
+    toast('Automatic guess turned on')
+    startFinding()
+    return
+  }
+  finding?.abort()
+  finding = null
+  endDetector(detector)
+  detector = null
+  guessToken++
+  guessing = false
+  await setGuessOff(true)
+  useDetector({ detector: null, notOffered: false, added: detectorAdded, off: true, published: null, later: false })
+  toast('Automatic guess turned off. The landmark detector was removed from this device.')
+})
 
 const detectorInput = $<HTMLInputElement>('detector-file')
 $('btn-detector-add').addEventListener('click', () => detectorInput.click())
@@ -1235,27 +1325,31 @@ detectorInput.addEventListener('change', async () => {
   if (!f) return
   try {
     const got = await addDetectorFile(f)
+    finding?.abort()
+    finding = null
+    const base = { notOffered: false, added: true, off: false, published: null, later: false }
     if (got.notOffered) {
       endDetector(detector)
       detector = null
-      const base = await findService()
-      useDetector({ detector: base ? { kind: 'service', base } : null, notOffered: true, added: true })
+      const service = await findService()
+      useDetector({ ...base, detector: service ? { kind: 'service', base: service } : null, notOffered: true })
       toast(NOT_OFFERED)
       return
     }
-    useDetector({ detector: got.detector, notOffered: false, added: true })
+    useDetector({ ...base, detector: got.detector })
     toast(got.kept ? 'Detector file added and kept on this device.' : 'Detector file added for this session only: this browser would not keep it.')
   } catch (err) {
     toast(err instanceof Error ? err.message : 'That file could not be used.')
   }
 })
 $('btn-detector-remove').addEventListener('click', async () => {
-  if (!confirm('Remove the detector file from this device? The automatic guess stops until a detector file is added again.')) return
+  if (!confirm('Remove your detector file from this device? The app goes back to its built-in detector.')) return
   await removeDetectorFile()
   endDetector(detector)
   detector = null
-  useDetector(await findDetector())
-  toast('Detector file removed')
+  detectorAdded = false
+  startFinding()
+  toast('Your detector file was removed')
 })
 $('btn-clear').addEventListener('click', clearAll)
 $('btn-adjust').addEventListener('click', () => toggleSheet('adjust'))
