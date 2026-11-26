@@ -75,13 +75,15 @@ Tap **PSO** in the bottom bar to plan a pedicle subtraction osteotomy on the pho
 
 ### Planning an interbody cage
 
-Tap **Cage** in the bottom bar to change the lordosis of one disc space, as an interbody cage would.
+Tap **Cage** in the bottom bar to change the lordosis of a disc space, as an interbody cage would. A plan can have several cages.
 
 1. Tap the **front and back corners of the upper endplate** of the disc, then the **front and back corners of the lower endplate**. The disc's lordosis is shown in front of it.
 2. Drag the **slider**, or tap **−** and **+** for one degree at a time, to set the angle the disc should have. Everything above the disc turns about the back of the disc, so the disc opens in front; the pelvis and everything below stay where they are. Posterior elements that would then overlap are drawn with the upper one on top.
-3. Tap **Done**. Results shows the cage in the *Plan* section with the change it makes.
+3. Tap **Add** for another cage at another disc, and tap its four corners the same way. Cages cannot overlap: a corner inside another cage, or a disc that would run into one, is refused with a message.
+4. To change a cage, tap its disc on the photo (or its row in Results): its slider comes back, and its corners can be dragged, even with the plan shown; a corner moved keeps the cage's change of angle. **Delete** takes out the cage being changed; the others stay. Cages are numbered in the order they were made.
+5. Tap **Done**. Results shows each cage in the *Plan* section with the change it makes; tap a row to change that step, or its ✕ to take it out.
 
-A PSO and a cage can be planned on the same film: each piece of the spine turns with every cut below it, and Results shows the whole plan before and after.
+A PSO and cages can be planned on the same film: each piece of the spine turns with every cut below it, and Results shows the whole plan before and after. Once the points of a new step are placed, the plan is shown again as it was.
 
 While the PSO or Cage tool is out, the landmarks and measurements are hidden so that only the photo and the plan are on screen. The photo itself is never changed. Because the pelvis is held still, PI, PT and SS do not change; in a patient, PT would usually fall after the correction. **Share** saves the view as it is, with a line saying what the plan shows. Choosing another tool puts the picture back as it was first, so new points land where they look. Place S1 and L1 (and the femoral heads for PI−LL and the pelvic angles) to see the numbers; the automatic guess places them for you.
 

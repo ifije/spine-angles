@@ -184,6 +184,8 @@ export function makeCage(pts: Pt[], facing: number, tilt = 0): Cage | CageProble
 export interface Cut {
   /** Which part of the plan it is. */
   kind: 'pso' | 'cage'
+  /** Which one: 'pso', or 'cage' and the cage's place in the list ('cage0', 'cage1', ...). */
+  key: string
   /** The hinge the piece above turns about. */
   h: Pt
   /** The turn in radians (positive is clockwise on screen, as canvas rotate). */
@@ -202,19 +204,22 @@ const levelOf = (h: Pt, tilt: number) => dot(h, rot({ x: 0, y: -1 }, -tilt))
 /** The PSO closed by the fraction t. */
 export function psoCut(w: Wedge, t: number, tilt = 0): Cut {
   return {
-    kind: 'pso', h: w.h, turn: t * w.theta, level: levelOf(w.h, tilt), moves: (p) => moves(w, p),
+    kind: 'pso', key: 'pso', h: w.h, turn: t * w.theta, level: levelOf(w.h, tilt), moves: (p) => moves(w, p),
     moving: (R) => pieces(w, R).moving, still: (R) => pieces(w, R).still,
   }
 }
 
-/** The cage with the disc set to `target` degrees of lordosis. */
-export function cageCut(c: Cage, target: number, tilt = 0): Cut {
+/** The turn, radians, that sets the disc to `target` degrees from its own angle. */
+export const cageTurn = (c: Cage, target: number) => (-(target - c.deg) * Math.PI * c.facing) / 180
+
+/** The cage with the disc set to `target` degrees of lordosis. `key` tells it from other cages. */
+export function cageCut(c: Cage, target: number, tilt = 0, key = 'cage0'): Cut {
   const up = rot({ x: 0, y: -1 }, -tilt)
   const s = Math.sign(cross(c.d, up)) || 1
   // More lordosis tips the piece above backwards: anticlockwise on screen when the patient faces right.
-  const turnBy = (-(target - c.deg) * Math.PI * c.facing) / 180
+  const turnBy = cageTurn(c, target)
   return {
-    kind: 'cage', h: c.h, turn: turnBy, level: levelOf(c.h, tilt),
+    kind: 'cage', key, h: c.h, turn: turnBy, level: levelOf(c.h, tilt),
     moves: (p) => (Math.sign(cross(c.d, sub(p, c.h))) || s) === s,
     moving: (R) => [c.h, ...arc(c.h, c.d, s * Math.PI, R)],
     still: (R) => [c.h, ...arc(c.h, c.d, -s * Math.PI, R)],
@@ -234,10 +239,22 @@ export const fromBelow = (cuts: Cut[]): Cut[] =>
     return a.level - b.level
   })
 
+/**
+ * How many of the cuts, taken from the pelvis upward, a point lies above: it is on the piece above each of them, up to
+ * the first it lies below. Where two cuts' lines cross inside the photo, the part beyond the crossing (above the upper
+ * line but below the lower) so stays with the lower piece, as the drawing has it.
+ */
+function above(C: Cut[], lead: Pt): number {
+  let j = 0
+  while (j < C.length && C[j].moves(lead)) j++
+  return j
+}
+
 /** Where a point ends up: it turns with every cut it lies above, the highest cut first. */
 export function moveThrough(cuts: Cut[], p: Pt, lead: Pt = p): Pt {
+  const C = fromBelow(cuts)
   let q = p
-  for (const c of fromBelow(cuts).reverse()) if (c.turn && c.moves(lead)) q = add(c.h, turn(sub(q, c.h), c.turn))
+  for (let k = above(C, lead) - 1; k >= 0; k--) if (C[k].turn) q = add(C[k].h, turn(sub(q, C[k].h), C[k].turn))
   return q
 }
 
@@ -253,4 +270,69 @@ export function moveFeaturesThrough(F: Features, cuts: Cut[]): Features {
 /** A free measurement's points moved; with `pairs`, each pair is one line and moves whole. */
 export function moveLinesThrough(pts: Pt[], cuts: Cut[], pairs: boolean): Pt[] {
   return pts.map((p, i) => moveThrough(cuts, p, pairs ? pts[i - (i % 2)] : p))
+}
+
+// ---- Cages do not overlap ----
+//
+// Each cage is a disc space; two cages in one picture are two different discs, so their outlines may not overlap. The
+// outlines are taken as tapped, on the photo as it is (before the plan moves anything).
+
+const orient = (a: Pt, b: Pt, c: Pt) => cross(sub(b, a), sub(c, a))
+/** Whether two segments cross each other (touching at an end, or lying along one line, is not crossing). */
+const segmentsCross = (a: Pt, b: Pt, c: Pt, d: Pt) =>
+  orient(a, b, c) * orient(a, b, d) < 0 && orient(c, d, a) * orient(c, d, b) < 0
+
+/** The disc's outline from its four corners (two endplates of two corners each), in an order that does not cross itself. */
+export function discOutline(pts: Pt[]): Pt[] {
+  const [a0, a1, b0, b1] = pts
+  // Round the disc as a0, a1, b1, b0, unless that makes its two sides a0-b0 and a1-b1 cross (the corners of one
+  // endplate came the other way round).
+  return segmentsCross(a0, b0, a1, b1) ? [a0, a1, b0, b1] : [a0, a1, b1, b0]
+}
+
+/** Whether a point is inside an outline. */
+export function insideOutline(poly: Pt[], p: Pt): boolean {
+  let c = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i]
+    const b = poly[j]
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c
+  }
+  return c
+}
+
+const edges = (poly: Pt[]): [Pt, Pt][] => poly.map((p, i) => [p, poly[(i + 1) % poly.length]])
+const centre = (poly: Pt[]): Pt => mul(poly.reduce(add, { x: 0, y: 0 }), 1 / poly.length)
+
+/** Whether two outlines overlap: their sides cross, or one lies inside the other (or they are nearly the same). */
+export function outlinesOverlap(A: Pt[], B: Pt[]): boolean {
+  for (const [a, b] of edges(A)) for (const [c, d] of edges(B)) if (segmentsCross(a, b, c, d)) return true
+  return A.some((p) => insideOutline(B, p)) || B.some((p) => insideOutline(A, p)) ||
+    insideOutline(B, centre(A)) || insideOutline(A, centre(B))
+}
+
+/** How far a point is from an outline: 0 inside it. */
+export function distToOutline(poly: Pt[], p: Pt): number {
+  if (insideOutline(poly, p)) return 0
+  let best = Infinity
+  for (const [a, b] of edges(poly)) {
+    const ab = sub(b, a)
+    const t = Math.max(0, Math.min(1, dot(sub(p, a), ab) / (dot(ab, ab) || 1)))
+    best = Math.min(best, Math.hypot(p.x - a.x - ab.x * t, p.y - a.y - ab.y * t))
+  }
+  return best
+}
+
+/**
+ * Which of the other cages (each its four corners) a cage being placed, or moved, would overlap: its index, or -1 for
+ * none. A cage of one to three corners so far is checked as far as it goes: no corner inside another cage, and its first
+ * endplate not across one.
+ */
+export function cageClash(pts: Pt[], others: Pt[][]): number {
+  return others.findIndex((o) => {
+    const O = discOutline(o)
+    if (pts.some((p) => insideOutline(O, p))) return true
+    if (pts.length >= 2 && edges(O).some(([c, d]) => segmentsCross(pts[0], pts[1], c, d))) return true
+    return pts.length === 4 && outlinesOverlap(discOutline(pts), O)
+  })
 }

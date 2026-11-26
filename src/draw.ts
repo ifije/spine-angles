@@ -506,7 +506,8 @@ export function drawPieces(ctx: CanvasRenderingContext2D, src: CanvasImageSource
     ctx.drawImage(src, 0, 0)
     ctx.restore()
   }
-  // Piece j lies above the j lowest cuts and below the others.
+  // Piece j lies above the j lowest cuts and below the next one. Where two cuts' lines cross inside the photo, the part
+  // beyond the crossing so goes with the lower piece (as the landmarks do, in moveThrough) rather than with none.
   for (let j = 0; j <= C.length; j++) {
     ctx.save()
     for (let k = 0; k < j; k++) {
@@ -514,7 +515,8 @@ export function drawPieces(ctx: CanvasRenderingContext2D, src: CanvasImageSource
       ctx.rotate(C[k].turn)
       ctx.translate(-C[k].h.x, -C[k].h.y)
     }
-    for (let k = 0; k < C.length; k++) clipTo(k < j ? C[k].moving(R) : C[k].still(R))
+    for (let k = 0; k < j; k++) clipTo(C[k].moving(R))
+    if (j < C.length) clipTo(C[j].still(R))
     ctx.drawImage(src, 0, 0)
     ctx.restore()
   }
@@ -522,19 +524,40 @@ export function drawPieces(ctx: CanvasRenderingContext2D, src: CanvasImageSource
 
 const C_CAGE = '#5ad1ff'
 
+export interface CageLook {
+  /** Rings on the corners, which can then be dragged. */
+  rings?: boolean
+  /** Drawn fainter: another cage is the one being changed. */
+  dim?: boolean
+  /** Its number, shown when there is more than one cage (0 for none). */
+  num?: number
+  /** Where the other cuts of the plan (a PSO or a cage below) put a point of the photo. */
+  carry?: (p: Pt) => Pt
+}
+
 /**
- * The cage's marks: the points tapped so far, the two endplates of the disc (the upper one as turned by `turn`, radians
+ * A cage's marks: the points tapped so far, the two endplates of the disc (the upper one as turned by `turn`, radians
  * about the hinge), the disc space between them, and its angle (and the angle it is set to, when that differs).
  */
 export function drawCage(
-  ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], c: Cage | CageProblem | null, target: number | null, turn: number, k: number, rings: boolean,
-  carry: (p: Pt) => Pt = (p) => p,
+  ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], c: Cage | CageProblem | null, target: number | null, turn: number, k: number,
+  look: CageLook = {},
 ): void {
-  // `carry`: where the other cuts of the plan (a PSO below) put a point of the photo.
+  const carry = look.carry ?? ((p: Pt) => p)
   const S = (p: Pt) => apply(M, carry(p))
+  const cs = Math.cos(turn)
+  const sn = Math.sin(turn)
+  // A corner as drawn: an upper one turns with the piece above the disc.
+  const at = (p: Pt) => {
+    if (!isCage(c) || !turn || !c.upper.includes(p)) return S(p)
+    const d = { x: p.x - c.h.x, y: p.y - c.h.y }
+    return S({ x: c.h.x + d.x * cs - d.y * sn, y: c.h.y + d.x * sn + d.y * cs })
+  }
+  const lw = look.dim ? 1.4 : 2
   ctx.save()
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
+  if (look.dim) ctx.globalAlpha = 0.7
   const line = (a: Pt, b: Pt, color: string, width: number) => {
     ctx.beginPath()
     ctx.moveTo(a.x, a.y)
@@ -547,35 +570,48 @@ export function drawCage(
     ctx.stroke()
   }
   if (isCage(c)) {
-    const cs = Math.cos(turn)
-    const sn = Math.sin(turn)
-    const moved = (p: Pt) => {
-      const d = { x: p.x - c.h.x, y: p.y - c.h.y }
-      return { x: c.h.x + d.x * cs - d.y * sn, y: c.h.y + d.x * sn + d.y * cs }
-    }
-    const uf = S(moved(c.upper[0]))
-    const ub = S(moved(c.upper[1]))
-    const lf = S(c.lower[0])
-    const lb = S(c.lower[1])
+    const uf = at(c.upper[0])
+    const ub = at(c.upper[1])
+    const lf = at(c.lower[0])
+    const lb = at(c.lower[1])
     ctx.beginPath()
     ctx.moveTo(uf.x, uf.y)
     ctx.lineTo(ub.x, ub.y)
     ctx.lineTo(lb.x, lb.y)
     ctx.lineTo(lf.x, lf.y)
     ctx.closePath()
-    ctx.fillStyle = 'rgba(90,209,255,0.22)'
+    ctx.fillStyle = look.dim ? 'rgba(90,209,255,0.12)' : 'rgba(90,209,255,0.22)'
     ctx.fill()
-    line(uf, ub, C_CAGE, 2)
-    line(lf, lb, C_CAGE, 2)
+    line(uf, ub, C_CAGE, lw)
+    line(lf, lb, C_CAGE, lw)
     const text = target === null || Math.round(target) === Math.round(c.deg) ? `${Math.round(c.deg)}°` : `${Math.round(c.deg)}° → ${Math.round(target)}°`
     // In front of the disc.
     const fm = { x: (uf.x + lf.x) / 2, y: (uf.y + lf.y) / 2 }
     const hm = S(c.h)
     const dn = Math.hypot(fm.x - hm.x, fm.y - hm.y) || 1
-    const q = { x: fm.x + ((fm.x - hm.x) / dn) * 14 * k, y: fm.y + ((fm.y - hm.y) / dn) * 14 * k }
+    const right = fm.x >= hm.x
+    let q = { x: fm.x + ((fm.x - hm.x) / dn) * 14 * k, y: fm.y + ((fm.y - hm.y) / dn) * 14 * k }
     ctx.font = `700 ${14 * k}px -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif`
-    ctx.textAlign = fm.x >= hm.x ? 'left' : 'right'
     ctx.textBaseline = 'middle'
+    if (look.num) {
+      // The cage's number in a disc of its colour, then the angles.
+      const r = 8 * k
+      const bx = q.x + (right ? r : -r)
+      ctx.beginPath()
+      ctx.arc(bx, q.y, r, 0, Math.PI * 2)
+      ctx.fillStyle = C_CAGE
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+      ctx.lineWidth = 1.5 * k
+      ctx.stroke()
+      ctx.fillStyle = '#0b1a22'
+      ctx.textAlign = 'center'
+      ctx.font = `800 ${11 * k}px -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif`
+      ctx.fillText(String(look.num), bx, q.y + 0.5 * k)
+      ctx.font = `700 ${14 * k}px -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif`
+      q = { x: bx + (right ? r + 5 * k : -r - 5 * k), y: q.y }
+    }
+    ctx.textAlign = right ? 'left' : 'right'
     ctx.lineWidth = 4 * k
     ctx.strokeStyle = 'rgba(0,0,0,0.85)'
     ctx.strokeText(text, q.x, q.y)
@@ -583,10 +619,10 @@ export function drawCage(
     ctx.fillText(text, q.x, q.y)
   } else {
     const s = pts.map(S)
-    for (let i = 0; i + 1 < s.length; i += 2) line(s[i], s[i + 1], C_CAGE, 2)
+    for (let i = 0; i + 1 < s.length; i += 2) line(s[i], s[i + 1], C_CAGE, lw)
   }
-  if (rings || !isCage(c)) {
-    for (const p of pts.map(S)) {
+  if (look.rings || !isCage(c)) {
+    for (const p of pts.map(at)) {
       ctx.beginPath()
       ctx.arc(p.x, p.y, 7 * k, 0, Math.PI * 2)
       ctx.strokeStyle = 'rgba(0,0,0,0.6)'

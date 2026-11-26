@@ -6,7 +6,7 @@ import { Features, compute } from '../src/sagittal'
 import { rot, Pt } from '../src/geometry'
 import {
   makeWedge, isWedge, moveFeatures, movePoint, pieces, Wedge, makeCage, isCage, cageCut, psoCut, moveThrough,
-  moveFeaturesThrough, Cut, fromBelow,
+  moveFeaturesThrough, Cut, fromBelow, discOutline, outlinesOverlap, insideOutline, distToOutline, cageClash,
 } from '../src/osteotomy'
 
 const P = (x: number, y: number) => ({ x, y })
@@ -208,5 +208,103 @@ describe('interbody cage', () => {
 
   it('refuses a disc that runs up and down the picture', () => {
     expect(makeCage([P(500, 800), P(500, 900), P(520, 800), P(520, 900)], 1)).toBe('vertical')
+  })
+})
+
+/** The L5-S1 disc of the same film: L5's lower endplate, then S1's upper one, front first. */
+const DISC2 = [P(561, 984), P(443, 949), P(560, 1000), P(440, 960)]
+
+describe('several cages', () => {
+  const withCuts = (f: Features, cuts: Cut[]) => {
+    const before = compute(f, {})
+    return { before, after: compute(moveFeaturesThrough(f, cuts), { facing: before.facing }) }
+  }
+  const a = makeCage(DISC, 1)
+  const b = makeCage(DISC2, 1)
+  if (!isCage(a) || !isCage(b)) throw new Error('no cages')
+  const cutA = cageCut(a, a.deg + 6, 0, 'cage0')
+  const cutB = cageCut(b, b.deg + 4, 0, 'cage1')
+
+  it('adds each change to LL and to L4-S1 when both discs are inside it, and leaves the pelvis alone', () => {
+    const { before, after } = withCuts(F, [cutA, cutB])
+    expect(val(after, 'LL') - val(before, 'LL')).toBeCloseTo(10, 9)
+    expect(val(after, 'L4S1') - val(before, 'L4S1')).toBeCloseTo(10, 9)
+    for (const k of ['PI', 'PT', 'SS']) expect(val(after, k)).toBeCloseTo(val(before, k), 9)
+  })
+
+  it('sets each disc to its own angle', () => {
+    const cuts = [cutA, cutB]
+    const da = makeCage(DISC.map((p) => moveThrough(cuts, p)), 1)
+    const db = makeCage(DISC2.map((p) => moveThrough(cuts, p)), 1)
+    if (!isCage(da) || !isCage(db)) throw new Error('no cages after')
+    expect(da.deg).toBeCloseTo(a.deg + 6, 9)
+    expect(db.deg).toBeCloseTo(b.deg + 4, 9)
+  })
+
+  it('gives the same in any order, with a PSO as well', () => {
+    const w = makeWedge(HINGE, BACK_UP, BACK_LOW)
+    if (!isWedge(w)) throw new Error('no wedge')
+    const pso = psoCut(w, 1)
+    const one = withCuts(F, [pso, cutA, cutB])
+    expect(val(one.after, 'LL') - val(one.before, 'LL')).toBeCloseTo(w.deg + 10, 9)
+    expect(val(one.after, 'L4S1') - val(one.before, 'L4S1')).toBeCloseTo(10, 9)
+    for (const order of [[cutB, pso, cutA], [cutA, cutB, pso], [cutB, cutA, pso]]) {
+      const r = withCuts(F, order)
+      for (const k of ['LL', 'L4S1', 'TPA', 'L1PA']) expect(val(r.after, k)).toBeCloseTo(val(one.after, k), 9)
+    }
+    expect(fromBelow([pso, cutA, cutB]).map((c) => c.key)).toEqual(['cage1', 'cage0', 'pso'])
+  })
+
+  it('keeps a point beyond the crossing of two cut lines with the lower piece', () => {
+    // A nearly level disc below, a steep one above: their middle lines cross behind the spine, at x 200.
+    const low = makeCage([P(600, 980), P(400, 990), P(600, 1000), P(400, 1010)], 1)
+    const high = makeCage([P(600, 880), P(400, 940), P(600, 900), P(400, 960)], 1)
+    if (!isCage(low) || !isCage(high)) throw new Error('no cages')
+    const cuts = [cageCut(low, low.deg + 5, 0, 'cage0'), cageCut(high, high.deg + 5, 0, 'cage1')]
+    // Above the upper disc's line but below the lower one's: it stays.
+    const beyond = P(100, 1030)
+    expect(cuts[1].moves(beyond)).toBe(true)
+    expect(cuts[0].moves(beyond)).toBe(false)
+    expect(moveThrough(cuts, beyond)).toEqual(beyond)
+    // Above both: it moves.
+    const top = P(450, 800)
+    expect(moveThrough(cuts, top)).not.toEqual(top)
+  })
+})
+
+describe('cages do not overlap', () => {
+  const shift = (pts: Pt[], dx: number, dy: number) => pts.map((p) => P(p.x + dx, p.y + dy))
+
+  it('goes round the disc whichever way the corners of each endplate came', () => {
+    const mid = P(508, 930)
+    expect(insideOutline(discOutline(DISC), mid)).toBe(true)
+    expect(insideOutline(discOutline([DISC[0], DISC[1], DISC[3], DISC[2]]), mid)).toBe(true)
+    expect(insideOutline(discOutline([DISC[1], DISC[0], DISC[2], DISC[3]]), mid)).toBe(true)
+  })
+
+  it('finds discs that cross, contain one another or are nearly the same; not separate ones', () => {
+    const O = discOutline(DISC)
+    expect(outlinesOverlap(O, discOutline(DISC2))).toBe(false)
+    expect(outlinesOverlap(O, discOutline(shift(DISC, 6, 8)))).toBe(true)
+    expect(outlinesOverlap(O, discOutline([P(540, 927), P(480, 925), P(540, 936), P(480, 931)]))).toBe(true)
+    expect(outlinesOverlap(O, discOutline([P(600, 900), P(400, 900), P(600, 980), P(400, 980)]))).toBe(true)
+    expect(outlinesOverlap(O, discOutline(DISC.map((p) => P(p.x, p.y))))).toBe(true)
+  })
+
+  it('checks a cage as far as it is placed, and says which cage it runs into', () => {
+    const others = [DISC2, DISC]
+    expect(cageClash(DISC2.slice(0, 1), [DISC])).toBe(-1)
+    expect(cageClash([P(508, 930)], others)).toBe(1)
+    // A first endplate drawn straight across a cage.
+    expect(cageClash([P(508, 900), P(508, 970)], [DISC])).toBe(0)
+    expect(cageClash(shift(DISC, 0, -4), others)).toBe(1)
+    expect(cageClash(shift(DISC, 0, -60), others)).toBe(-1)
+  })
+
+  it('measures how near a tap is to a disc', () => {
+    const O = discOutline(DISC)
+    expect(distToOutline(O, P(508, 930))).toBe(0)
+    expect(distToOutline(O, P(508, 900))).toBeGreaterThan(15)
+    expect(distToOutline(O, P(508, 900))).toBeLessThan(25)
   })
 })

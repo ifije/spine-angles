@@ -3,11 +3,11 @@
 
 import './style.css'
 import { Pt, dist, mid, rot } from './geometry'
-import { Doc, Mat, Measure, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, isDone, measureText } from './model'
+import { Doc, Mat, Measure, PlannedCage, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, isDone, measureText } from './model'
 import { drawOverlay, colorFor, drawPieces, drawWedge, drawCage } from './draw'
 import {
   Wedge, WedgeProblem, makeWedge, isWedge, Cage, CageProblem, makeCage, isCage, Cut, psoCut, cageCut, moveThrough,
-  moveFeaturesThrough, moveLinesThrough,
+  moveFeaturesThrough, moveLinesThrough, discOutline, distToOutline, cageClash,
 } from './osteotomy'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
@@ -48,8 +48,12 @@ type Tool = ToolKind | 'guided' | 'pso' | 'cage' | null
 let tool: Tool = null
 /** How far the planned osteotomy is closed: 0 open, 1 closed. Not part of the document, so undo leaves it. */
 let psoClose = 0
-/** Whether the cage's change of the disc angle is shown on the photo (it is put back while points are tapped). */
+/** Whether the cages' changes of their disc angles are shown on the photo (they are put back while points are tapped). */
 let cageShown = true
+/** The cage the Cage tool is changing (its place in doc.cages), or null for none chosen. */
+let cageSel: number | null = null
+/** The next taps place another cage (Add). */
+let cageNew = false
 /** The PSO and Cage tools plan on the photo; while one is out the landmarks are hidden. */
 const planTool = (t: Tool) => t === 'pso' || t === 'cage'
 /** Free measurement currently being placed. */
@@ -141,43 +145,95 @@ const wedge = (): Wedge | WedgeProblem | null =>
  * Which way the patient faces, for the cage: the Facing button, else the landmarks' endplates, else the cage's own taps
  * (the front corner of each endplate is asked for first).
  */
-function cageFacing(): number {
+function cageFacing(pts: Pt[]): number {
   if (facingOverride) return facingOverride
   if (FEATURES.some((f) => f.plane === 'sagittal' && f.kind === 'line' && isComplete(doc.features, f.id))) return sagittal().facing
-  const P = doc.cage?.pts ?? []
   let v = 0
-  for (let i = 0; i + 1 < P.length; i += 2) v += Math.sign(rot(P[i], doc.tilt).x - rot(P[i + 1], doc.tilt).x)
+  for (let i = 0; i + 1 < pts.length; i += 2) v += Math.sign(rot(pts[i], doc.tilt).x - rot(pts[i + 1], doc.tilt).x)
   return v < 0 ? -1 : 1
 }
-/** The planned cage once its four points are there (or why they make none), else null. */
-const cage = (): Cage | CageProblem | null =>
-  doc.cage?.pts.length === 4 ? makeCage(doc.cage.pts, doc.cage.facing ?? cageFacing(), doc.tilt) : null
-/** The angle the cage sets the disc to: its own angle until it is changed. */
-function cageTarget(): number | null {
-  const c = cage()
-  return isCage(c) ? doc.cage!.target ?? c.deg : null
+const cagesOf = (): PlannedCage[] => doc.cages ?? []
+/** Cage i once its four points are there (or why they make none), else null. */
+function cageAt(i: number): Cage | CageProblem | null {
+  const g = doc.cages?.[i]
+  return g?.pts.length === 4 ? makeCage(g.pts, g.facing ?? cageFacing(g.pts), doc.tilt) : null
 }
-/** The plan's cuts as shown on the photo: the PSO as far as it is closed, the cage when shown and changing the disc. */
+/** The angle cage i sets its disc to: the disc's own angle until it is changed. */
+function cageTarget(i: number): number | null {
+  const c = cageAt(i)
+  return isCage(c) ? doc.cages![i].target ?? c.deg : null
+}
+/** Cage i's cut, when it changes its disc's angle; else null. */
+function cageCutOf(i: number): Cut | null {
+  const c = cageAt(i)
+  const tg = cageTarget(i)
+  return isCage(c) && tg !== null && Math.abs(tg - c.deg) > 1e-9 ? cageCut(c, tg, doc.tilt, `cage${i}`) : null
+}
+/** The plan's cuts as shown on the photo: the PSO as far as it is closed, the cages when shown and changing their discs. */
 function shownCuts(): Cut[] {
   const cuts: Cut[] = []
   const w = wedge()
   if (isWedge(w) && psoClose > 0) cuts.push(psoCut(w, psoClose, doc.tilt))
-  const c = cage()
-  const tg = cageTarget()
-  if (isCage(c) && cageShown && tg !== null && Math.abs(tg - c.deg) > 1e-9) cuts.push(cageCut(c, tg, doc.tilt))
+  if (cageShown) cagesOf().forEach((_, i) => {
+    const c = cageCutOf(i)
+    if (c) cuts.push(c)
+  })
   return cuts
 }
-/** The whole plan: the PSO closed, the cage at its angle. */
+/** The whole plan: the PSO closed, each cage at its angle. */
 function plannedCuts(): Cut[] {
   const cuts: Cut[] = []
   const w = wedge()
   if (isWedge(w)) cuts.push(psoCut(w, 1, doc.tilt))
-  const c = cage()
-  const tg = cageTarget()
-  if (isCage(c) && tg !== null) cuts.push(cageCut(c, tg, doc.tilt))
+  cagesOf().forEach((_, i) => {
+    const c = cageCutOf(i)
+    if (c) cuts.push(c)
+  })
   return cuts
 }
-const hasPlan = () => isWedge(wedge()) || isCage(cage())
+const hasPlan = () => isWedge(wedge()) || cagesOf().some((_, i) => isCage(cageAt(i)))
+
+/** p turned by r radians about h (clockwise on screen, as canvas rotate). */
+function turnAbout(h: Pt, p: Pt, r: number): Pt {
+  const c = Math.cos(r)
+  const s = Math.sin(r)
+  const dx = p.x - h.x
+  const dy = p.y - h.y
+  return { x: h.x + dx * c - dy * s, y: h.y + dx * s + dy * c }
+}
+/**
+ * Where corner j of cage i is drawn when it is kept at x: carried by the plan's other cuts as shown, and an upper corner
+ * also turned by the cage's own change (which a dragged corner keeps).
+ */
+function cornerShown(i: number, j: number, x: Pt): Pt {
+  const g = cagesOf()[i]
+  const cuts = shownCuts()
+  const own = cuts.find((c) => c.key === `cage${i}`)
+  const others = cuts.filter((c) => c !== own)
+  let p = x
+  if (own && g.pts.length === 4) {
+    const pts = g.pts.map((q, k) => (k === j ? x : q))
+    const c = makeCage(pts, g.facing ?? cageFacing(pts), doc.tilt)
+    if (isCage(c) && c.upper.includes(x)) p = turnAbout(c.h, x, own.turn)
+  }
+  return moveThrough(others, p)
+}
+/** The cage's outline as drawn. */
+const cageShape = (i: number): Pt[] => discOutline(cagesOf()[i].pts.map((x, j) => cornerShown(i, j, x)))
+/**
+ * The kept point that `show` draws at q, starting from p: a point dragged on the plan as shown is kept where it is on the
+ * photo as it is. Each step is exact for a map that turns and shifts; more steps follow a hinge that moves with the point.
+ */
+function pullBack(show: (x: Pt) => Pt, q: Pt, p: Pt): Pt {
+  for (let n = 0; n < 4; n++) {
+    const a = show(p)
+    const b = show({ x: p.x + 1, y: p.y })
+    const r = -Math.atan2(b.y - a.y, b.x - a.x)
+    const d = { x: q.x - a.x, y: q.y - a.y }
+    p = { x: p.x + d.x * Math.cos(r) - d.y * Math.sin(r), y: p.y + d.x * Math.sin(r) + d.y * Math.cos(r) }
+  }
+  return p
+}
 /** The document as shown: with the plan shown, everything above each cut moved with its piece of the spine. */
 function shownDoc(): Doc {
   const cuts = shownCuts()
@@ -197,18 +253,32 @@ function shownSagittal() {
   return cuts.length ? sagittalWith(cuts) : sagittal()
 }
 
-/** The plan's own marks (the PSO's wedge, the cage's disc), each carried by the other cuts as shown. */
+/**
+ * The plan's own marks (the PSO's wedge, each cage's disc), each carried by the other cuts as shown. With the Cage tool
+ * out, the cage being changed (or placed) has its corners ringed and the others are fainter.
+ */
 function drawPlanMarks(ctx: CanvasRenderingContext2D, M: Mat, k: number, onScreen: boolean) {
   const cuts = shownCuts()
   if (doc.pso?.length) {
     const others = cuts.filter((c) => c.kind !== 'pso')
-    drawWedge(ctx, M, doc.pso, wedge(), psoClose, k, onScreen && tool === 'pso' && !cuts.length, (p) => moveThrough(others, p))
+    drawWedge(ctx, M, doc.pso, wedge(), psoClose, k, onScreen && tool === 'pso' && psoClose === 0, (p) => moveThrough(others, p))
   }
-  if (doc.cage?.pts.length) {
-    const others = cuts.filter((c) => c.kind !== 'cage')
-    const own = cuts.find((x) => x.kind === 'cage')
-    drawCage(ctx, M, doc.cage.pts, cage(), cageTarget(), own ? own.turn : 0, k, onScreen && tool === 'cage' && !cuts.length, (p) => moveThrough(others, p))
-  }
+  const cages = cagesOf()
+  const out = onScreen && tool === 'cage'
+  const adding = placingCage()
+  cages.forEach((g, i) => {
+    if (!g.pts.length) return
+    const own = cuts.find((c) => c.key === `cage${i}`)
+    const others = cuts.filter((c) => c !== own)
+    const chosen = out && !adding && i === cageSel
+    const placingThis = out && g.pts.length < 4
+    drawCage(ctx, M, g.pts, cageAt(i), cageTarget(i), own ? own.turn : 0, k, {
+      rings: chosen || placingThis,
+      dim: out && !chosen && !placingThis,
+      num: cages.length > 1 ? i + 1 : 0,
+      carry: (p) => moveThrough(others, p),
+    })
+  })
 }
 
 // ---------------------------------------------------------------- drawing
@@ -252,7 +322,10 @@ function drawLoupe() {
   li.fillStyle = '#000'
   li.fillRect(0, 0, cvLoupeImage.width, cvLoupeImage.height)
   li.setTransform(M[0] * dpr, M[1] * dpr, M[2] * dpr, M[3] * dpr, M[4] * dpr, M[5] * dpr)
-  li.drawImage(src, 0, 0)
+  // The plan as shown, so a corner dragged on it sits on the bone it is drawn on.
+  const cuts = shownCuts()
+  if (cuts.length) drawPieces(li, src, cuts, 0.25)
+  else li.drawImage(src, 0, 0)
   const lo = cvLoupeOverlay.getContext('2d')!
   lo.setTransform(dpr, 0, 0, dpr, 0, 0)
   lo.clearRect(0, 0, LOUPE, LOUPE)
@@ -348,7 +421,7 @@ function setTilt(deg: number) {
 
 // ---------------------------------------------------------------- undo
 
-const snapshot = () => JSON.stringify({ doc, activeId, replacing })
+const snapshot = () => JSON.stringify({ doc, activeId, replacing, cageSel })
 
 function pushUndo(snap = snapshot()) {
   handEdits++
@@ -360,8 +433,10 @@ function undo() {
   const snap = undoStack.pop()
   if (!snap) return
   handEdits++
-  const s = JSON.parse(snap) as { doc: Doc; activeId: number | null; replacing?: FeatureId | null }
+  const s = JSON.parse(snap) as { doc: Doc; activeId: number | null; replacing?: FeatureId | null; cageSel?: number | null }
   doc = s.doc
+  // The cage that was chosen then (a cage deleted and brought back is chosen again, not the one now in its place).
+  if (s.cageSel !== undefined) cageSel = s.cageSel
   replacing = tool === 'guided' ? s.replacing ?? null : null
   const partial = doc.measures.find((m) => !isDone(m))
   if (partial) {
@@ -371,8 +446,11 @@ function undo() {
     activeId = null
   }
   if (selected !== null && !doc.measures.some((m) => m.id === selected)) selected = null
-  // A measuring tool brought back by undo works on the photo as it is.
-  if (placing()) openPlan()
+  if (cageSel !== null && cageSel >= cagesOf().length) cageSel = cagesOf().length ? cagesOf().length - 1 : null
+  // A measuring tool brought back by undo works on the photo as it is; undone past a plan tool's placing, the plan shows
+  // again as it was.
+  if (placing()) openPlan(planTool(tool))
+  else if (planTool(tool) && reopen) showPlanAgain(false)
   syncAdjustInputs()
   // Undone past everything the prompts asked for: the prompts are over.
   if (tool === 'guided' && !currentStep()) return finishGuided()
@@ -395,27 +473,57 @@ function dropPartials() {
   const partialM = doc.measures.some((m) => !isDone(m))
   const partialF = FEATURES.some((f) => doc.features[f.id] && !isComplete(doc.features, f.id))
   const partialP = !!doc.pso && doc.pso.length < 3
-  const partialC = !!doc.cage && doc.cage.pts.length < 4
+  const partialC = cagesOf().some((g) => g.pts.length < 4)
   if (!partialM && !partialF && !partialP && !partialC) return
   pushUndo()
   doc.measures = doc.measures.filter(isDone)
   for (const f of FEATURES) if (!isComplete(doc.features, f.id)) delete doc.features[f.id]
   if (partialP) delete doc.pso
-  if (partialC) delete doc.cage
+  if (partialC) {
+    doc.cages = cagesOf().filter((g) => g.pts.length === 4)
+    if (!doc.cages.length) delete doc.cages
+    if (cageSel !== null && cageSel >= cagesOf().length) cageSel = null
+  }
   activeId = null
+}
+
+/** The Cage tool is placing a cage's corners: another one (Add, or none yet), or the last one, part-placed. */
+function placingCage(): boolean {
+  const cages = cagesOf()
+  return tool === 'cage' && (cageNew || !cages.length || cages[cages.length - 1].pts.length < 4)
 }
 
 /** The tool out places points by tapping the photo (rather than working a slider). */
 const placing = () =>
-  !!tool && (tool === 'pso' ? (doc.pso?.length ?? 0) < 3 : tool === 'cage' ? (doc.cage?.pts.length ?? 0) < 4 : true)
+  !!tool && (tool === 'pso' ? (doc.pso?.length ?? 0) < 3 : tool === 'cage' ? placingCage() : true)
 
-/** Taps work on the photo as it is: a plan that moves the picture is put back first. It stays planned. */
-function openPlan() {
+/** How the plan was shown before it was opened to place points, to show it so again once they are placed. */
+let reopen: { pso: number; cages: boolean } | null = null
+
+/**
+ * Taps work on the photo as it is: a plan that moves the picture is put back first. It stays planned. `keep`: a plan tool
+ * is placing points, and the plan is shown again as it was once they are placed (see showPlanAgain); a measuring tool
+ * leaves it open.
+ */
+function openPlan(keep = false) {
+  if (!keep) reopen = null
   if (!shownCuts().length) return
+  if (keep) reopen = { pso: psoClose, cages: cageShown }
   psoClose = 0
   psoSlider.value = '0'
   cageShown = false
   toast('Plan opened to place points')
+}
+
+/**
+ * A plan tool's points are placed (or the placing is cancelled): the plan is shown as it was before it was opened. A new
+ * wedge starts open; the cages show their changes.
+ */
+function showPlanAgain(newWedge: boolean) {
+  if (reopen && !newWedge && isWedge(wedge())) psoClose = reopen.pso
+  psoSlider.value = String(Math.round(psoClose * 100))
+  cageShown = true
+  reopen = null
 }
 
 function armTool(kind: ToolKind) {
@@ -447,12 +555,20 @@ function armPso() {
 function armPlan(which: 'pso' | 'cage') {
   if (!src) return toast('Choose a photo first')
   if (tool === which) return finishPlan()
+  // From another plan tool part-way through placing its points: the plan shows as it was.
+  if (planTool(tool) && placing()) showPlanAgain(false)
   dropPartials()
   tool = which
   activeId = null
   selected = null
   selectedFeature = null
-  if (placing()) openPlan()
+  if (which === 'cage') {
+    // Back to the cage changed last (or the last one made); with none yet, the taps place the first.
+    cageNew = false
+    const n = cagesOf().length
+    if (cageSel === null || cageSel >= n) cageSel = n ? n - 1 : null
+  }
+  if (placing()) openPlan(true)
   else if (which === 'cage') cageShown = true
   openSheet(null)
   refresh()
@@ -461,18 +577,45 @@ function armPlan(which: 'pso' | 'cage') {
 
 /** Done: the plan stays as it is and Results shows what it changes. */
 function finishPlan() {
+  // Done (or Cancel) before the points were all placed: the plan shows as it was.
+  if (placing()) showPlanAgain(false)
+  cageNew = false
   dropPartials()
   tool = null
   openSheet(hasPlan() ? 'results' : null)
   refresh()
 }
 
+/** A step of the plan tapped in Results: its tool, with that step to change. */
+function editPlan(which: 'pso' | number) {
+  if (which === 'pso') {
+    if (tool !== 'pso') armPlan('pso')
+    else openSheet(null)
+    return
+  }
+  if (tool === 'cage' && placingCage()) {
+    // The part-placed cage goes (it is the last, so the index stays right) and the plan shows as it was.
+    showPlanAgain(false)
+    cageNew = false
+    dropPartials()
+  }
+  if (tool !== 'cage') armPlan('cage')
+  cageSel = which
+  cageNew = false
+  cageShown = true
+  openSheet(null)
+  refresh()
+}
+
 function removePlan() {
-  if (!doc.pso && !doc.cage) return
+  if (!doc.pso && !doc.cages) return
   pushUndo()
   delete doc.pso
-  delete doc.cage
+  delete doc.cages
   psoClose = 0
+  cageSel = null
+  cageNew = false
+  reopen = null
   if (planTool(tool)) tool = null
   refresh()
 }
@@ -499,6 +642,7 @@ psoSlider.value = '0'
 psoSlider.setAttribute('aria-label', 'How far the wedge is closed')
 psoSlider.addEventListener('input', () => {
   psoClose = Number(psoSlider.value) / 100
+  reopen = null
   // Only the picture and the hint's text follow while sliding; the rest catches up when the finger lifts.
   const w = wedge()
   if (isWedge(w)) $('hint-text').textContent = psoText(w)
@@ -529,12 +673,81 @@ function armCage() {
   armPlan('cage')
 }
 
-function removeCage() {
-  if (!doc.cage) return
-  pushUndo()
-  delete doc.cage
-  if (tool === 'cage') tool = null
+/** Add: the next four taps place another cage, on the photo as it is. */
+function addCage() {
+  cageNew = true
+  openPlan(true)
   refresh()
+}
+
+/** Cancel while placing: the part-placed cage goes; back to the cages there are, or the tool goes when there are none. */
+function cancelCage() {
+  cageNew = false
+  dropPartials()
+  const n = cagesOf().length
+  if (!n) return finishPlan()
+  if (cageSel === null || cageSel >= n) cageSel = n - 1
+  showPlanAgain(false)
+  refresh()
+}
+
+/** Take cage i out of the plan; the others keep their numbers in order. */
+function removeCage(i: number) {
+  const cages = cagesOf()
+  if (!cages[i]) return
+  pushUndo()
+  cages.splice(i, 1)
+  if (!cages.length) delete doc.cages
+  if (cageSel !== null) cageSel = cageSel === i ? null : cageSel > i ? cageSel - 1 : cageSel
+  if (tool === 'cage' && !cagesOf().length) tool = null
+  refresh()
+}
+
+/** Why a corner cannot go where it was tapped or dragged: it would make cage n overlap another. */
+function clashText(corners: number, n: number): string {
+  if (corners === 4) return `That disc would overlap cage ${n}: cages cannot overlap`
+  if (corners === 2) return `That endplate would cross cage ${n}: cages cannot overlap`
+  return `That is inside cage ${n}: cages cannot overlap`
+}
+
+/** The cage, if any, whose disc as drawn is at p (photo pixels) or within tol of it: the nearest. */
+function cageNear(p: Pt, tol: number): number | null {
+  let best: number | null = null
+  let bestD = tol
+  cagesOf().forEach((g, i) => {
+    if (g.pts.length < 4) return
+    const d = distToOutline(cageShape(i), p)
+    if (d <= bestD) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
+}
+
+/** Cage i's other cages, each its four corners, with their own numbers. */
+function otherCages(i: number): { pts: Pt[]; n: number }[] {
+  return cagesOf().flatMap((g, k) => (k !== i && g.pts.length === 4 ? [{ pts: g.pts, n: k + 1 }] : []))
+}
+
+let clashToldAt = 0
+/**
+ * A corner of cage i dragged to p: refused where the cage would overlap another. The cage keeps `keep`, its change of
+ * angle when the drag began (none: the disc as measured), even if the disc runs up the picture part-way through.
+ */
+function moveCorner(i: number, j: number, p: Pt, keep?: number) {
+  const g = cagesOf()[i]
+  const pts = g.pts.map((q, k) => (k === j ? p : q))
+  const others = otherCages(i)
+  const k = cageClash(pts, others.map((o) => o.pts))
+  if (k >= 0) {
+    if (performance.now() - clashToldAt > 1500) toast(clashText(4, others[k].n))
+    clashToldAt = performance.now()
+    return
+  }
+  g.pts[j] = p
+  const now = cageAt(i)
+  if (keep !== undefined && isCage(now)) g.target = now.deg + keep
 }
 
 /** The disc-angle slider, made once like the PSO's. A change is one undo step, taken when the finger lifts. */
@@ -545,12 +758,12 @@ cageSlider.step = '1'
 cageSlider.setAttribute('aria-label', 'The disc angle the cage sets')
 let cageBefore: string | null = null
 cageSlider.addEventListener('input', () => {
-  if (!doc.cage) return
+  const i = cageSel
+  if (i === null || !cagesOf()[i]) return
   if (cageBefore === null) cageBefore = snapshot()
-  setCageTarget(Number(cageSlider.value))
+  setCageTarget(i, Number(cageSlider.value))
   cageShown = true
-  const c = cage()
-  if (isCage(c)) $('hint-text').textContent = cageText(c)
+  $('hint-text').textContent = cageText(i)
   requestDraw()
 })
 /** The finger lifts (or the browser says the value changed): one undo step, if anything changed. */
@@ -565,27 +778,32 @@ cageSlider.addEventListener('pointerdown', () => (planSliding = true))
 cageSlider.addEventListener('pointerup', endCageSlide)
 cageSlider.addEventListener('pointercancel', endCageSlide)
 
-/** One degree more or less, from the buttons beside the slider. */
+/** One degree more or less for the cage being changed, from the buttons beside the slider. */
 function stepCage(by: number) {
-  const tg = cageTarget()
-  if (tg === null || !doc.cage) return
+  const i = cageSel
+  const tg = i === null ? null : cageTarget(i)
+  if (i === null || tg === null) return
   pushUndo()
-  setCageTarget(Math.round(tg) + by)
+  setCageTarget(i, Math.round(tg) + by)
   cageShown = true
   refresh()
 }
 
 /** Whole degrees; the whole degree nearest the disc's measured angle means the disc as measured. */
-function setCageTarget(v: number) {
-  const c = cage()
-  if (!doc.cage || !isCage(c)) return
-  if (v === Math.round(c.deg)) delete doc.cage.target
-  else doc.cage.target = v
+function setCageTarget(i: number, v: number) {
+  const c = cageAt(i)
+  const g = cagesOf()[i]
+  if (!g || !isCage(c)) return
+  if (v === Math.round(c.deg)) delete g.target
+  else g.target = v
 }
 
-function cageText(c: Cage): string {
-  const tg = cageTarget() ?? c.deg
-  return Math.round(tg) === Math.round(c.deg) ? `Cage: disc ${Math.round(c.deg)}°, slide to change` : `Cage: disc ${Math.round(c.deg)}° → ${Math.round(tg)}°`
+function cageText(i: number): string {
+  const c = cageAt(i)
+  const name = `Cage ${i + 1}`
+  if (!isCage(c)) return `${name}: the disc should run across the spine. Drag its corners.`
+  const tg = cageTarget(i) ?? c.deg
+  return Math.round(tg) === Math.round(c.deg) ? `${name}: disc ${Math.round(c.deg)}°, slide to change` : `${name}: disc ${Math.round(c.deg)}° → ${Math.round(tg)}°`
 }
 
 /**
@@ -661,18 +879,42 @@ function onTap(screen: Pt) {
     if ((doc.pso?.length ?? 0) >= 3) return
     pushUndo()
     ;(doc.pso ??= []).push(p)
-    if (doc.pso.length === 3) psoClose = 0
+    if (doc.pso.length === 3) {
+      psoClose = 0
+      showPlanAgain(true)
+    }
     refresh()
     return
   }
   if (tool === 'cage') {
-    if ((doc.cage?.pts.length ?? 0) >= 4) return
+    if (!placingCage()) {
+      // A tap on a cage's disc (or near it: a disc is a few points tall on a phone) chooses it to change.
+      const i = cageNear(p, 24 / view.s)
+      if (i !== null && i !== cageSel) {
+        cageSel = i
+        cageShown = true
+        refresh()
+      }
+      return
+    }
+    const cages = cagesOf()
+    const last = cages[cages.length - 1]
+    const fresh = !last || last.pts.length >= 4
+    const pts = fresh ? [p] : [...last.pts, p]
+    // Cages may not overlap: a corner that would make this one overlap another is not placed.
+    const others = otherCages(-1)
+    const k = cageClash(pts, others.map((o) => o.pts))
+    if (k >= 0) return toast(clashText(pts.length, others[k].n))
     pushUndo()
-    ;(doc.cage ??= { pts: [] }).pts.push(p)
-    if (doc.cage.pts.length === 4) {
+    const g: PlannedCage = fresh ? { pts: [] } : last
+    if (fresh) (doc.cages ??= []).push(g)
+    g.pts.push(p)
+    if (g.pts.length === 4) {
       // Which way the patient faces is settled now, so a later landmark or guess cannot turn the cage round.
-      doc.cage.facing = cageFacing() < 0 ? -1 : 1
-      cageShown = true
+      g.facing = cageFacing(g.pts) < 0 ? -1 : 1
+      showPlanAgain(false)
+      cageNew = false
+      cageSel = cagesOf().length - 1
     }
     refresh()
     return
@@ -841,13 +1083,16 @@ function clearGroup(group: 'basic' | Plane) {
 }
 
 function clearAll() {
-  if (!doc.measures.length && !Object.keys(doc.features).length && !doc.pso && !doc.cage) return
+  if (!doc.measures.length && !Object.keys(doc.features).length && !doc.pso && !doc.cages) return
   pushUndo()
   doc.measures = []
   doc.features = {}
   delete doc.pso
-  delete doc.cage
+  delete doc.cages
   psoClose = 0
+  cageSel = null
+  cageNew = false
+  reopen = null
   skipped.clear()
   tool = null
   activeId = null
@@ -863,44 +1108,63 @@ interface Handle {
   i: number
   measureId?: number
   feature?: FeatureId
+  /** A cage's corner: the cage's place in doc.cages. */
+  cage?: number
+  /** For a cage's corner: the cage's change of angle when the drag began (target − measured), which it keeps. */
+  keep?: number
+  /** Where the point is drawn when it is kept at x (a plan's point, carried by the plan as shown); else where it is kept. */
+  show?: (x: Pt) => Pt
 }
+
+/** Where a handle's point is drawn, in photo pixels. */
+const shownAt = (h: Handle): Pt => (h.show ? h.show(h.pts[h.i]) : h.pts[h.i])
 
 function hitHandle(screen: Pt, radius: number): Handle | null {
   const M = viewMat()
   let best: Handle | null = null
   let bestD = radius
   const consider = (h: Handle) => {
-    const d = dist(apply(M, h.pts[h.i]), screen)
+    const d = dist(apply(M, shownAt(h)), screen)
     if (d <= bestD) {
       bestD = d
       best = h
     }
   }
-  // With the plan shown, points are drawn away from where they are kept: nothing is dragged until it is put back.
-  if (shownCuts().length) return null
-  // With the PSO tool out the landmarks are hidden, so only the wedge's points can be dragged; while its three points go
-  // down, every tap places one (two back points can be a few pixels apart).
+  // With the PSO tool out the landmarks are hidden, so only the wedge's points can be dragged (while it is open; cages
+  // shown below it carry them, and a drag is carried back); while its three points go down, every tap places one (two
+  // back points can be a few pixels apart).
   if (tool === 'pso') {
-    if ((doc.pso?.length ?? 0) < 3) return null
-    doc.pso!.forEach((_, i) => consider({ pts: doc.pso!, i }))
+    if ((doc.pso?.length ?? 0) < 3 || psoClose > 0) return null
+    const others = shownCuts()
+    const show = (x: Pt) => moveThrough(others, x)
+    doc.pso!.forEach((_, i) => consider({ pts: doc.pso!, i, show }))
     return best
   }
+  // With the Cage tool out, the corners of the cage being changed, where they are drawn.
   if (tool === 'cage') {
-    if ((doc.cage?.pts.length ?? 0) < 4) return null
-    doc.cage!.pts.forEach((_, i) => consider({ pts: doc.cage!.pts, i }))
+    const i = cageSel
+    const g = i === null ? undefined : cagesOf()[i]
+    if (i === null || !g || g.pts.length < 4 || placingCage()) return null
+    // A touch nearer another cage's disc is a tap that chooses that cage, not a drag of this one's corner.
+    const near = cageNear(invert(M, screen), radius / view.s)
+    if (near !== null && near !== i) return null
+    const c = cageAt(i)
+    const keep = isCage(c) && g.target !== undefined ? g.target - c.deg : undefined
+    g.pts.forEach((_, j) => consider({ pts: g.pts, i: j, cage: i, keep, show: (x) => cornerShown(i, j, x) }))
     return best
   }
+  // With the plan shown, the landmarks are drawn away from where they are kept: nothing is dragged until it is put back.
+  if (shownCuts().length) return null
   for (const m of doc.measures) m.pts.forEach((_, i) => consider({ pts: m.pts, i, measureId: m.id }))
   for (const f of FEATURES) doc.features[f.id]?.forEach((_, i) => consider({ pts: doc.features[f.id]!, i, feature: f.id }))
   return best
 }
 
 function moveHandle(h: Handle, p: Pt) {
+  if (h.cage !== undefined) return moveCorner(h.cage, h.i, p, h.keep)
   const old = h.pts[h.i]
   // A guess that has been moved is the user's landmark from then on.
   if (h.feature && doc.auto) delete doc.auto[h.feature]
-  // A cage's corner moved: the disc is measured anew, and its angle is left as measured.
-  if (doc.cage && h.pts === doc.cage.pts) delete doc.cage.target
   h.pts[h.i] = p
   // Dragging a femoral head's centre carries its rim point with it.
   if (h.feature && FEATURE_BY_ID[h.feature].kind === 'circle' && h.i === 0 && h.pts[1]) {
@@ -931,7 +1195,7 @@ function showLoupe(at: Pt, finger: Pt) {
 
 function endDrag() {
   if (gesture?.type !== 'drag') return
-  if (gesture.moved) pushUndo(gesture.before)
+  if (gesture.moved && gesture.before !== snapshot()) pushUndo(gesture.before)
   loupeAt = null
   loupeEl.hidden = true
 }
@@ -956,13 +1220,13 @@ cvOverlay.addEventListener('pointerdown', (e) => {
   if (pointers.size > 2) return
   const h = hitHandle(p, e.pointerType === 'mouse' ? 12 : 26)
   if (h) {
-    const sp = apply(viewMat(), h.pts[h.i])
+    const sp = apply(viewMat(), shownAt(h))
     gesture = { type: 'drag', id: e.pointerId, h, start: p, off: { x: sp.x - p.x, y: sp.y - p.y }, before: snapshot(), moved: false }
     if (!tool) {
       selected = h.measureId ?? null
       selectedFeature = h.feature ?? null
     }
-    showLoupe(h.pts[h.i], p)
+    showLoupe(shownAt(h), p)
     refresh()
   } else {
     gesture = { type: 'tap', id: e.pointerId, start: p }
@@ -992,11 +1256,13 @@ cvOverlay.addEventListener('pointermove', (e) => {
     // Ignore the small wobble of a tap so that selecting a point does not nudge it.
     if (!g.moved && dist(p, g.start) < 3) return
     g.moved = true
-    const ip = invert(viewMat(), { x: p.x + g.off.x, y: p.y + g.off.y })
+    let ip = invert(viewMat(), { x: p.x + g.off.x, y: p.y + g.off.y })
+    // A plan's point drawn where the plan carries it is kept where that is on the photo as it is.
+    if (g.h.show) ip = pullBack(g.h.show, ip, g.h.pts[g.h.i])
     ip.x = Math.min(src.width, Math.max(0, ip.x))
     ip.y = Math.min(src.height, Math.max(0, ip.y))
     moveHandle(g.h, ip)
-    showLoupe(g.h.pts[g.h.i], p)
+    showLoupe(shownAt(g.h), p)
     refresh()
   } else if (g.type === 'tap') {
     if (dist(p, g.start) > 8) gesture = { type: 'pan', id: g.id, last: p }
@@ -1078,13 +1344,14 @@ function updateHint() {
   const actions = $('hint-actions')
   if (planSliding && planTool(tool)) {
     const w = wedge()
-    const c = cage()
     if (tool === 'pso' && isWedge(w)) $('hint-text').textContent = psoText(w)
-    if (tool === 'cage' && isCage(c)) $('hint-text').textContent = cageText(c)
+    if (tool === 'cage' && cageSel !== null && cagesOf()[cageSel]) $('hint-text').textContent = cageText(cageSel)
     return
   }
   actions.replaceChildren()
-  hint.classList.remove('two')
+  const more = $('hint-more')
+  more.replaceChildren()
+  hint.classList.remove('two', 'more')
   let text = ''
   if (src && tool === 'guided') {
     const cur = currentStep()
@@ -1109,22 +1376,32 @@ function updateHint() {
       actions.append(psoSlider, button('Done', finishPlan))
     }
   } else if (src && tool === 'cage') {
-    const n = doc.cage?.pts.length ?? 0
-    const c = cage()
-    if (n < 4) {
-      text = `Cage ${n + 1}/4: ${CAGE_PROMPTS[n]}`
-      actions.append(button('Cancel', armCage))
-    } else if (!isCage(c)) {
-      text = 'Cage: the disc should run across the spine. Drag its corners.'
-      actions.append(button('Remove', removeCage, 'danger'), button('Done', finishPlan))
+    const cages = cagesOf()
+    const i = cageSel
+    if (placingCage()) {
+      const last = cages[cages.length - 1]
+      const part = !!last && last.pts.length < 4
+      const n = part ? last.pts.length : 0
+      const num = part ? cages.length : cages.length + 1
+      text = num === 1 ? `Cage ${n + 1}/4: ${CAGE_PROMPTS[n]}` : `Cage ${num} · ${n + 1}/4: ${CAGE_PROMPTS[n]}`
+      actions.append(button('Cancel', cancelCage))
+    } else if (i === null || !cages[i]) {
+      text = 'Cage: tap a cage to change it, or add another'
+      actions.append(button('Add', addCage), button('Done', finishPlan))
     } else {
-      text = cageText(c)
-      const tg = Math.round(cageTarget() ?? c.deg)
-      cageSlider.min = String(Math.min(-10, Math.round(c.deg) - 10))
-      cageSlider.max = String(Math.max(40, Math.round(c.deg) + 10))
-      cageSlider.value = String(tg)
-      hint.classList.add('two')
-      actions.append(button('−', () => stepCage(-1), 'step'), cageSlider, button('+', () => stepCage(1), 'step'), button('Done', finishPlan))
+      const c = cageAt(i)
+      text = cageText(i)
+      hint.classList.add('two', 'more')
+      more.append(button('Add', addCage), button('Delete', () => removeCage(i), 'danger'))
+      if (isCage(c)) {
+        const tg = Math.round(cageTarget(i) ?? c.deg)
+        cageSlider.min = String(Math.min(-10, Math.round(c.deg) - 10))
+        cageSlider.max = String(Math.max(40, Math.round(c.deg) + 10))
+        cageSlider.value = String(tg)
+        actions.append(button('−', () => stepCage(-1), 'step'), cageSlider, button('+', () => stepCage(1), 'step'), button('Done', finishPlan))
+      } else {
+        actions.append(button('Done', finishPlan))
+      }
     }
   } else if (src && tool && !planTool(tool) && tool !== 'guided') {
     const n = doc.measures.find((m) => m.id === activeId)?.pts.length ?? 0
@@ -1213,13 +1490,27 @@ const PLAN_KEYS = ['LL', 'L4S1', 'PI-LL', 'L1PA', 'T4PA', 'TPA']
 /** The pelvis's own measures, which the plan holds still. */
 const PELVIS_KEYS = ['PI', 'PT', 'SS']
 
-/** The plan's steps, each with what it does and a way to take it out. */
-function planSteps(): { name: string; value: string; remove: () => void }[] {
-  const out: { name: string; value: string; remove: () => void }[] = []
+interface PlanStep {
+  name: string
+  value: string
+  remove: () => void
+  /** Its tool, with this step to change. */
+  edit: () => void
+}
+
+/** The plan's steps, each with what it does, a way to change it and a way to take it out. */
+function planSteps(): PlanStep[] {
+  const out: PlanStep[] = []
   const w = wedge()
-  if (isWedge(w)) out.push({ name: 'PSO wedge', value: `${w.deg.toFixed(1)}°`, remove: removePso })
-  const c = cage()
-  if (isCage(c)) out.push({ name: 'Cage: disc angle', value: `${c.deg.toFixed(1)}° → ${(cageTarget() ?? c.deg).toFixed(1)}°`, remove: removeCage })
+  if (isWedge(w)) out.push({ name: 'PSO wedge', value: `${w.deg.toFixed(1)}°`, remove: removePso, edit: () => editPlan('pso') })
+  cagesOf().forEach((_, i) => {
+    const c = cageAt(i)
+    if (!isCage(c)) return
+    out.push({
+      name: `Cage ${i + 1}: disc angle`, value: `${c.deg.toFixed(1)}° → ${(cageTarget(i) ?? c.deg).toFixed(1)}°`,
+      remove: () => removeCage(i), edit: () => editPlan(i),
+    })
+  })
   return out
 }
 
@@ -1240,7 +1531,11 @@ function planChanges(before = sagittal()): { before: Result; after: Result }[] {
 function renderPlan(body: HTMLElement, before: ReturnType<typeof compute>) {
   body.append(sectionHead('Plan', removePlan))
   for (const s of planSteps()) {
-    const row = el('div', 'res plan')
+    // Tapped, the step's tool comes out to change it; its ✕ takes it out.
+    const row = el('div', 'res plan tap')
+    row.addEventListener('click', (e) => {
+      if (!(e.target as Element).closest('button')) s.edit()
+    })
     row.append(el('div', 'name', s.name), el('div', 'val', s.value), button('✕', s.remove))
     body.append(row)
   }
@@ -1263,9 +1558,14 @@ function planNote(): string | undefined {
   const parts: string[] = []
   const w = wedge()
   if (isWedge(w)) parts.push(`PSO ${Math.round(w.deg)}° ${psoClose >= 1 ? 'closed' : psoClose > 0 ? `${Math.round(psoClose * 100)}% closed` : 'open'}`)
-  const c = cage()
-  const tg = cageTarget()
-  if (isCage(c) && tg !== null) parts.push(`disc ${Math.round(c.deg)}° → ${Math.round(tg)}°${cageShown ? '' : ' (not shown)'}`)
+  const many = cagesOf().length > 1
+  cagesOf().forEach((_, i) => {
+    const c = cageAt(i)
+    const tg = cageTarget(i)
+    if (isCage(c) && tg !== null) {
+      parts.push(`${many ? `cage ${i + 1} ` : ''}disc ${Math.round(c.deg)}° → ${Math.round(tg)}°${cageShown ? '' : ' (not shown)'}`)
+    }
+  })
   return parts.length ? `Plan: ${parts.join('; ')}. Values as shown.` : undefined
 }
 
@@ -1505,7 +1805,7 @@ function syncAdjustInputs() {
 // ---------------------------------------------------------------- photo
 
 async function openPhoto(file: Blob) {
-  const hasWork = doc.measures.length > 0 || Object.keys(doc.features).length > 0 || !!doc.pso || !!doc.cage
+  const hasWork = doc.measures.length > 0 || Object.keys(doc.features).length > 0 || !!doc.pso || !!doc.cages
   if (src && hasWork && !confirm('Replace the current photo and its measurements?')) return
   try {
     src = await loadPhoto(file)
@@ -1519,6 +1819,9 @@ async function openPhoto(file: Blob) {
   tool = null
   psoClose = 0
   cageShown = true
+  cageSel = null
+  cageNew = false
+  reopen = null
   activeId = null
   selected = null
   selectedFeature = null
@@ -1555,7 +1858,7 @@ function transformPhoto(next: HTMLCanvasElement, map: (p: Pt) => Pt) {
   for (const m of doc.measures) m.pts = m.pts.map(map)
   for (const f of FEATURES) if (doc.features[f.id]) doc.features[f.id] = doc.features[f.id]!.map(map)
   if (doc.pso) doc.pso = doc.pso.map(map)
-  if (doc.cage) doc.cage.pts = doc.cage.pts.map(map)
+  for (const g of cagesOf()) g.pts = g.pts.map(map)
   // Earlier snapshots refer to the old orientation.
   undoStack = []
   fit()
@@ -1971,6 +2274,7 @@ $('btn-flip').addEventListener('click', () => {
   if (!src) return
   const w = src.width
   doc.tilt = -doc.tilt
+  for (const g of cagesOf()) if (g.facing) g.facing = g.facing > 0 ? -1 : 1
   transformPhoto(flipH(src), (p) => ({ x: w - p.x, y: p.y }))
   syncAdjustInputs()
 })
@@ -1985,11 +2289,15 @@ $('btn-reset').addEventListener('click', () => {
 
 $('btn-facing').addEventListener('click', () => {
   facingOverride = facingOverride ? 0 : -sagittal().facing
-  // A cage follows the photo's facing; its disc is measured anew, so the angle it was set to goes back to as measured.
-  if (doc.cage?.facing !== undefined && doc.cage.facing !== sagittal().facing) {
-    pushUndo()
-    doc.cage.facing = sagittal().facing
-    delete doc.cage.target
+  // The cages follow the photo's facing; each disc is measured anew, so the angle it was set to goes back to as measured.
+  const f = sagittal().facing
+  let changed = false
+  for (const g of cagesOf()) {
+    if (g.facing === undefined || g.facing === f) continue
+    if (!changed) pushUndo()
+    changed = true
+    g.facing = f
+    delete g.target
   }
   refresh()
 })
@@ -2065,7 +2373,7 @@ $('btn-share').addEventListener('click', async () => {
     const outcome = await exportView({
       src, doc: shownDoc(), tone, M: viewMat(), W, H, sagittal: shownSagittal(), focus, overlay: !planTool(tool),
       paint: cuts.length ? (c) => drawPieces(c, photo, cuts, 0.25) : undefined,
-      decorate: doc.pso?.length || doc.cage?.pts.length ? (c, M, k) => drawPlanMarks(c, M, k, false) : undefined,
+      decorate: doc.pso?.length || doc.cages?.length ? (c, M, k) => drawPlanMarks(c, M, k, false) : undefined,
       note: planNote(),
     })
     if (outcome === 'downloaded') toast('Image saved')

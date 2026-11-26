@@ -202,6 +202,11 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 #hint.two #hint-actions { flex: 1 1 100%; }
 #hint.two #hint-actions input[type='range'] { flex: 1 1 auto; width: auto; min-width: 0; }
 #hint-actions button.step { min-width: 44px; padding: 0; font-size: 20px; }
+/* Buttons beside the hint's text (the Cage tool's Add and Delete), the slider and Done on the line below. */
+#hint-more { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+#hint-more:empty { display: none; }
+#hint-more button { min-height: 40px; padding: 0 12px; }
+#hint.two.more #hint-text { flex: 1 1 0; min-width: 0; }
 /* Before and after in Results' plan section. */
 #results-body .res.plan .val { white-space: nowrap; }
 
