@@ -26,13 +26,15 @@ export interface ExportInput {
   decorate?: (ctx: CanvasRenderingContext2D, M: Mat, k: number) => void
   /** A line for the footer, before the caption (what the values show). */
   note?: string
+  /** Draw the landmarks and measurements (false while the PSO tool hides them on screen). Default true. */
+  overlay?: boolean
 }
 
 const CAPTION = 'Measured on a photograph. Approximate; not for diagnostic use.'
 
 /** Render exactly what is on screen (so anything panned out of view is left out), plus a results footer. */
 export function renderExport(input: ExportInput): HTMLCanvasElement {
-  const { src, doc, tone, M, W, H, sagittal, focus, paint, decorate, note } = input
+  const { src, doc, tone, M, W, H, sagittal, focus, paint, decorate, note, overlay = true } = input
   const k = Math.max(2, Math.min(3, 2000 / Math.max(W, H)))
   const w = Math.round(W * k)
   const h = Math.round(H * k)
@@ -85,7 +87,7 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
   ctx.beginPath()
   ctx.rect(0, 0, w, h)
   ctx.clip()
-  drawOverlay(ctx, Mk, doc, { k, selected: null, sag: sagittal, focus })
+  if (overlay) drawOverlay(ctx, Mk, doc, { k, selected: null, sag: sagittal, focus })
   decorate?.(ctx, Mk, k)
   ctx.restore()
 

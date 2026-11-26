@@ -176,7 +176,8 @@ function draw() {
   const cw = closedWedge()
   if (cw) drawCut(ictx, src, cw, psoClose, 0.25)
   else ictx.drawImage(src, 0, 0)
-  drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
+  // While the PSO tool is out, only the photo and the wedge: the landmarks come back, moved, with Done.
+  if (tool !== 'pso') drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
   if (doc.pso?.length) drawWedge(octx, M, doc.pso, wedge(), psoClose, 1, tool === 'pso' && psoClose === 0)
   if (loupeAt) drawLoupe()
 }
@@ -196,7 +197,7 @@ function drawLoupe() {
   const lo = cvLoupeOverlay.getContext('2d')!
   lo.setTransform(dpr, 0, 0, dpr, 0, 0)
   lo.clearRect(0, 0, LOUPE, LOUPE)
-  drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
+  if (tool !== 'pso') drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
   if (doc.pso?.length) drawWedge(lo, M, doc.pso, wedge(), 0, 1, true)
   // Crosshair ticks, leaving the centre clear.
   for (const [color, width] of [['rgba(0,0,0,0.7)', 3], ['#fff', 1]] as const) {
@@ -382,6 +383,7 @@ function armPso() {
   selectedFeature = null
   openSheet(null)
   refresh()
+  if (doc.measures.length || Object.keys(doc.features).length) toast('Landmarks hidden while you plan; Done brings them back')
 }
 
 /** Done: the wedge stays as it is (open or closed) and Results shows what it changes. */
@@ -708,12 +710,15 @@ function hitHandle(screen: Pt, radius: number): Handle | null {
   }
   // With the wedge closed, points are drawn away from where they are kept: nothing is dragged until it is opened.
   if (psoClose > 0 && isWedge(wedge())) return null
-  // While the wedge's three points go down, every tap places one (two back points can be a few pixels apart).
-  if (tool === 'pso' && (doc.pso?.length ?? 0) < 3) return null
+  // With the PSO tool out the landmarks are hidden, so only the wedge's points can be dragged; while its three points go
+  // down, every tap places one (two back points can be a few pixels apart).
+  if (tool === 'pso') {
+    if ((doc.pso?.length ?? 0) < 3) return null
+    doc.pso!.forEach((_, i) => consider({ pts: doc.pso!, i }))
+    return best
+  }
   for (const m of doc.measures) m.pts.forEach((_, i) => consider({ pts: m.pts, i, measureId: m.id }))
   for (const f of FEATURES) doc.features[f.id]?.forEach((_, i) => consider({ pts: doc.features[f.id]!, i, feature: f.id }))
-  // The wedge's points can be dragged while the PSO tool is out.
-  if (tool === 'pso' && doc.pso) doc.pso.forEach((_, i) => consider({ pts: doc.pso!, i }))
   return best
 }
 
@@ -1834,7 +1839,7 @@ $('btn-share').addEventListener('click', async () => {
     const cw = closedWedge()
     const photo = src
     const outcome = await exportView({
-      src, doc: shownDoc(), tone, M: viewMat(), W, H, sagittal: shownSagittal(), focus,
+      src, doc: shownDoc(), tone, M: viewMat(), W, H, sagittal: shownSagittal(), focus, overlay: tool !== 'pso',
       paint: cw ? (c) => drawCut(c, photo, cw, psoClose, 0.25) : undefined,
       decorate: doc.pso?.length ? (c, M, k) => drawWedge(c, M, doc.pso!, w, psoClose, k, false) : undefined,
       note: isWedge(w)
