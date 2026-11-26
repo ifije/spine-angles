@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Wolfray Applied Technologies, LLC
 
-// Planning a pedicle subtraction osteotomy (PSO): pure geometry, no drawing.
+// Planning a pedicle subtraction osteotomy (PSO) and an interbody cage: pure geometry, no drawing.
 //
 // Three points mark the wedge: the hinge (the tip of the wedge, at the front of the vertebral body), then the two
 // points where the cuts reach the back wall of the body, in either order. Both cuts carry on straight past those
@@ -9,7 +9,7 @@
 // everything above it about the hinge until the upper cut lies on the lower cut; the pelvis and everything below the
 // wedge stay where they are.
 
-import { Pt, rot } from './geometry'
+import { Pt, rot, endplateSlope } from './geometry'
 import type { Features } from './sagittal'
 
 export interface Wedge {
@@ -125,4 +125,132 @@ export function pieces(w: Wedge, R: number): { moving: Pt[]; still: Pt[] } {
   const s = Math.sign(w.theta)
   const half = Math.PI - Math.abs(w.theta) / 2
   return { moving: [w.h, ...arc(w.h, w.u, -s * half, R)], still: [w.h, ...arc(w.h, w.l, s * half, R)] }
+}
+
+// ---- The interbody cage ----
+//
+// Four points mark the disc space: the front and back corners of the upper endplate, then of the lower endplate. The
+// disc's lordosis is the angle between the two endplates (front taller is positive, as LL is measured). The cage opens
+// the disc in front: the picture is split along the disc's middle line and everything above turns about the middle of
+// the two back corners. The disc's height is not changed.
+
+export interface Cage {
+  /** The upper and lower endplates of the disc, each [front corner, back corner]. */
+  upper: [Pt, Pt]
+  lower: [Pt, Pt]
+  /** The hinge: the middle of the two back corners. */
+  h: Pt
+  /** Unit direction along the disc's middle line, from the hinge towards the front. */
+  d: Pt
+  /** The disc's lordosis, degrees. */
+  deg: number
+  /** Which way the patient faces: +1 when the front is towards image right. */
+  facing: 1 | -1
+}
+
+/** Why four points make no cage: the disc's middle line runs up and down the picture. */
+export type CageProblem = 'vertical'
+
+export const isCage = (c: Cage | CageProblem | null | undefined): c is Cage => !!c && typeof c !== 'string'
+
+/**
+ * The cage from its four points (the first two one endplate, the last two the other, in any order within and between
+ * them). `facing` says which way the patient faces; `tilt` is the photo's levelling (degrees, as Doc.tilt).
+ */
+export function makeCage(pts: Pt[], facing: number, tilt = 0): Cage | CageProblem {
+  const f: 1 | -1 = facing < 0 ? -1 : 1
+  const up = rot({ x: 0, y: -1 }, -tilt)
+  const front = rot({ x: f, y: 0 }, -tilt)
+  const mid2 = (a: Pt, b: Pt) => mul(add(a, b), 0.5)
+  let a: [Pt, Pt] = [pts[0], pts[1]]
+  let b: [Pt, Pt] = [pts[2], pts[3]]
+  if (dot(mid2(...b), up) > dot(mid2(...a), up)) [a, b] = [b, a]
+  const order = (e: [Pt, Pt]): [Pt, Pt] => (dot(e[0], front) >= dot(e[1], front) ? e : [e[1], e[0]])
+  const upper = order(a)
+  const lower = order(b)
+  const h = mid2(upper[1], lower[1])
+  const d = unit(sub(mid2(upper[0], lower[0]), h))
+  if (Math.abs(dot(d, up)) > Math.cos((20 * Math.PI) / 180)) return 'vertical'
+  const lev = (p: Pt) => rot(p, tilt)
+  const slope = (e: [Pt, Pt]) => endplateSlope(lev(e[0]), lev(e[1]), f)
+  let deg = slope(lower) - slope(upper)
+  if (deg > 180) deg -= 360
+  if (deg <= -180) deg += 360
+  return { upper, lower, h, d, deg, facing: f }
+}
+
+// ---- Cuts: a PSO or a cage, as a piece of the picture that turns about a hinge ----
+
+export interface Cut {
+  /** Which part of the plan it is. */
+  kind: 'pso' | 'cage'
+  /** The hinge the piece above turns about. */
+  h: Pt
+  /** The turn in radians (positive is clockwise on screen, as canvas rotate). */
+  turn: number
+  /** How high the hinge is up the levelled picture, to take cuts in order from the pelvis upward. */
+  level: number
+  /** Whether a point is on the piece above the cut. */
+  moves: (p: Pt) => boolean
+  /** The piece above and the piece below, as polygons reaching R from the hinge (anything between them is taken out). */
+  moving: (R: number) => Pt[]
+  still: (R: number) => Pt[]
+}
+
+const levelOf = (h: Pt, tilt: number) => dot(h, rot({ x: 0, y: -1 }, -tilt))
+
+/** The PSO closed by the fraction t. */
+export function psoCut(w: Wedge, t: number, tilt = 0): Cut {
+  return {
+    kind: 'pso', h: w.h, turn: t * w.theta, level: levelOf(w.h, tilt), moves: (p) => moves(w, p),
+    moving: (R) => pieces(w, R).moving, still: (R) => pieces(w, R).still,
+  }
+}
+
+/** The cage with the disc set to `target` degrees of lordosis. */
+export function cageCut(c: Cage, target: number, tilt = 0): Cut {
+  const up = rot({ x: 0, y: -1 }, -tilt)
+  const s = Math.sign(cross(c.d, up)) || 1
+  // More lordosis tips the piece above backwards: anticlockwise on screen when the patient faces right.
+  const turnBy = (-(target - c.deg) * Math.PI * c.facing) / 180
+  return {
+    kind: 'cage', h: c.h, turn: turnBy, level: levelOf(c.h, tilt),
+    moves: (p) => (Math.sign(cross(c.d, sub(p, c.h))) || s) === s,
+    moving: (R) => [c.h, ...arc(c.h, c.d, s * Math.PI, R)],
+    still: (R) => [c.h, ...arc(c.h, c.d, -s * Math.PI, R)],
+  }
+}
+
+/**
+ * From the pelvis upward. A cut is above another when its hinge lies on the other's moving piece and not the other way
+ * round (a cage's hinge at the back of a sloping disc can sit higher than a PSO's hinge just above it); only when that
+ * does not decide is the height of the hinges used.
+ */
+export const fromBelow = (cuts: Cut[]): Cut[] =>
+  [...cuts].sort((a, b) => {
+    const aAbove = b.moves(a.h)
+    const bAbove = a.moves(b.h)
+    if (aAbove !== bAbove) return aAbove ? 1 : -1
+    return a.level - b.level
+  })
+
+/** Where a point ends up: it turns with every cut it lies above, the highest cut first. */
+export function moveThrough(cuts: Cut[], p: Pt, lead: Pt = p): Pt {
+  let q = p
+  for (const c of fromBelow(cuts).reverse()) if (c.turn && c.moves(lead)) q = add(c.h, turn(sub(q, c.h), c.turn))
+  return q
+}
+
+/** Every landmark moved with its piece; a landmark moves whole, decided by its first point (a femoral head's centre). */
+export function moveFeaturesThrough(F: Features, cuts: Cut[]): Features {
+  const out: Features = {}
+  for (const [id, pts] of Object.entries(F) as [keyof Features, Pt[]][]) {
+    if (pts) out[id] = pts.map((p) => moveThrough(cuts, p, pts[0]))
+  }
+  return out
+}
+
+/** A free measurement's points moved; with `pairs`, each pair is one line and moves whole. */
+export function moveLinesThrough(pts: Pt[], cuts: Cut[], pairs: boolean): Pt[] {
+  return pts.map((p, i) => moveThrough(cuts, p, pairs ? pts[i - (i % 2)] : p))
 }

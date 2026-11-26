@@ -71,11 +71,19 @@ Tap **PSO** in the bottom bar to plan a pedicle subtraction osteotomy on the pho
 1. Tap the **hinge**: the front of the vertebral body, where the wedge comes to a point.
 2. Tap the two **back points**, where the upper and lower cuts meet the back wall of the body, in either order. Both cuts carry on straight through the posterior elements, so everything inside the wedge is taken out. The wedge angle is shown at the hinge. Drag any of the three points to adjust them.
 3. Drag the **slider** to close the wedge. Everything above it turns about the hinge; the pelvis and everything below stay where they are.
-4. Tap **Done**. The landmarks come back, those above the wedge moved with it, and **Results** shows a *PSO plan* section: the wedge, and LL, L4–S1, PI−LL, L1PA, T4PA and TPA (and anything else the wedge changes) before and after. Its **Clear** removes the plan.
+4. Tap **Done**. The landmarks come back, those above the wedge moved with it, and **Results** shows the *Plan* section: the wedge, and LL, L4–S1, PI−LL, L1PA, T4PA and TPA (and anything else the plan changes) before and after. Its **Clear** removes the plan; **✕** beside a step removes that step.
 
-While the PSO tool is out, the landmarks and measurements are hidden so that only the photo and the wedge are on screen.
+### Planning an interbody cage
 
-The photo itself is never changed. Because the pelvis is held still, PI, PT and SS do not change; in a patient, PT would usually fall after the correction. **Share** saves the view as it is, closed or open, with a line saying which. Choosing another tool opens the wedge first, so new points land where they look. Place S1 and L1 (and the femoral heads for PI−LL and the pelvic angles) to see the numbers; the automatic guess places them for you.
+Tap **Cage** in the bottom bar to change the lordosis of one disc space, as an interbody cage would.
+
+1. Tap the **front and back corners of the upper endplate** of the disc, then the **front and back corners of the lower endplate**. The disc's lordosis is shown in front of it.
+2. Drag the **slider**, or tap **−** and **+** for one degree at a time, to set the angle the disc should have. Everything above the disc turns about the back of the disc, so the disc opens in front; the pelvis and everything below stay where they are. Posterior elements that would then overlap are drawn with the upper one on top.
+3. Tap **Done**. Results shows the cage in the *Plan* section with the change it makes.
+
+A PSO and a cage can be planned on the same film: each piece of the spine turns with every cut below it, and Results shows the whole plan before and after.
+
+While the PSO or Cage tool is out, the landmarks and measurements are hidden so that only the photo and the plan are on screen. The photo itself is never changed. Because the pelvis is held still, PI, PT and SS do not change; in a patient, PT would usually fall after the correction. **Share** saves the view as it is, with a line saying what the plan shows. Choosing another tool puts the picture back as it was first, so new points land where they look. Place S1 and L1 (and the femoral heads for PI−LL and the pelvic angles) to see the numbers; the automatic guess places them for you.
 
 ### Adjusting and correcting
 

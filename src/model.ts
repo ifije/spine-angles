@@ -29,6 +29,12 @@ export interface Doc {
   auto?: Partial<Record<FeatureId, number>>
   /** A planned osteotomy (PSO): the hinge, then the two back points (fewer while it is being placed). */
   pso?: Pt[]
+  /**
+   * A planned interbody cage: the front and back corners of the disc's upper endplate, then of its lower endplate (fewer
+   * while it is being placed), the disc angle it is set to (none: the disc as measured), and which way the patient faces,
+   * settled when the fourth corner goes down.
+   */
+  cage?: { pts: Pt[]; target?: number; facing?: 1 | -1 }
 }
 
 export const isDone = (m: Measure): boolean => m.pts.length >= NEED[m.kind]

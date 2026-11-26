@@ -6,7 +6,7 @@
 import { Pt, mid, dist } from './geometry'
 import { Doc, Mat, apply, isDone, measureText } from './model'
 import { FEATURES, FeatureId, SagittalResults, formatValue, isComplete } from './sagittal'
-import { Wedge, WedgeProblem, isWedge, pieces } from './osteotomy'
+import { Wedge, WedgeProblem, isWedge, pieces, Cage, CageProblem, isCage, Cut, fromBelow } from './osteotomy'
 
 export interface DrawOpts {
   /** Unit scale for line widths and text (1 on screen, larger for export). */
@@ -375,8 +375,12 @@ export function drawCut(ctx: CanvasRenderingContext2D, src: CanvasImageSource & 
  * bone taken out with both cuts carried on past the back points, and the angle at the hinge. `w` is the wedge once
  * all three points are there (or why they make none); `t` how far it is closed.
  */
-export function drawWedge(ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], w: Wedge | WedgeProblem | null, t: number, k: number, rings: boolean): void {
-  const S = (p: Pt) => apply(M, p)
+export function drawWedge(
+  ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], w: Wedge | WedgeProblem | null, t: number, k: number, rings: boolean,
+  carry: (p: Pt) => Pt = (p) => p,
+): void {
+  // `carry`: where the other cuts of the plan (a cage below) put a point of the photo.
+  const S = (p: Pt) => apply(M, carry(p))
   ctx.save()
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
@@ -476,6 +480,126 @@ export function drawWedge(ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], w: W
       ctx.fillStyle = '#fff'
       ctx.fill()
     })
+  }
+  ctx.restore()
+}
+
+/**
+ * Draw the photo cut into pieces by any number of cuts (a PSO, a cage): the piece below every cut where it is, each
+ * piece above turned with every cut beneath it. The context's transform maps photo pixels to the output. `ghost` (0 to 1)
+ * also draws faintly where everything that moved was. Where pieces now overlap, the higher piece is drawn on top.
+ */
+export function drawPieces(ctx: CanvasRenderingContext2D, src: CanvasImageSource & { width: number; height: number }, cuts: Cut[], ghost = 0): void {
+  const R = 4 * Math.max(src.width, src.height)
+  const C = fromBelow(cuts)
+  const clipTo = (P: Pt[]) => {
+    ctx.beginPath()
+    ctx.moveTo(P[0].x, P[0].y)
+    for (let i = 1; i < P.length; i++) ctx.lineTo(P[i].x, P[i].y)
+    ctx.closePath()
+    ctx.clip()
+  }
+  if (ghost > 0 && C.length) {
+    ctx.save()
+    ctx.globalAlpha = ghost
+    clipTo(C[0].moving(R))
+    ctx.drawImage(src, 0, 0)
+    ctx.restore()
+  }
+  // Piece j lies above the j lowest cuts and below the others.
+  for (let j = 0; j <= C.length; j++) {
+    ctx.save()
+    for (let k = 0; k < j; k++) {
+      ctx.translate(C[k].h.x, C[k].h.y)
+      ctx.rotate(C[k].turn)
+      ctx.translate(-C[k].h.x, -C[k].h.y)
+    }
+    for (let k = 0; k < C.length; k++) clipTo(k < j ? C[k].moving(R) : C[k].still(R))
+    ctx.drawImage(src, 0, 0)
+    ctx.restore()
+  }
+}
+
+const C_CAGE = '#5ad1ff'
+
+/**
+ * The cage's marks: the points tapped so far, the two endplates of the disc (the upper one as turned by `turn`, radians
+ * about the hinge), the disc space between them, and its angle (and the angle it is set to, when that differs).
+ */
+export function drawCage(
+  ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], c: Cage | CageProblem | null, target: number | null, turn: number, k: number, rings: boolean,
+  carry: (p: Pt) => Pt = (p) => p,
+): void {
+  // `carry`: where the other cuts of the plan (a PSO below) put a point of the photo.
+  const S = (p: Pt) => apply(M, carry(p))
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  const line = (a: Pt, b: Pt, color: string, width: number) => {
+    ctx.beginPath()
+    ctx.moveTo(a.x, a.y)
+    ctx.lineTo(b.x, b.y)
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'
+    ctx.lineWidth = (width + 2) * k
+    ctx.stroke()
+    ctx.strokeStyle = color
+    ctx.lineWidth = width * k
+    ctx.stroke()
+  }
+  if (isCage(c)) {
+    const cs = Math.cos(turn)
+    const sn = Math.sin(turn)
+    const moved = (p: Pt) => {
+      const d = { x: p.x - c.h.x, y: p.y - c.h.y }
+      return { x: c.h.x + d.x * cs - d.y * sn, y: c.h.y + d.x * sn + d.y * cs }
+    }
+    const uf = S(moved(c.upper[0]))
+    const ub = S(moved(c.upper[1]))
+    const lf = S(c.lower[0])
+    const lb = S(c.lower[1])
+    ctx.beginPath()
+    ctx.moveTo(uf.x, uf.y)
+    ctx.lineTo(ub.x, ub.y)
+    ctx.lineTo(lb.x, lb.y)
+    ctx.lineTo(lf.x, lf.y)
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(90,209,255,0.22)'
+    ctx.fill()
+    line(uf, ub, C_CAGE, 2)
+    line(lf, lb, C_CAGE, 2)
+    const text = target === null || Math.round(target) === Math.round(c.deg) ? `${Math.round(c.deg)}°` : `${Math.round(c.deg)}° → ${Math.round(target)}°`
+    // In front of the disc.
+    const fm = { x: (uf.x + lf.x) / 2, y: (uf.y + lf.y) / 2 }
+    const hm = S(c.h)
+    const dn = Math.hypot(fm.x - hm.x, fm.y - hm.y) || 1
+    const q = { x: fm.x + ((fm.x - hm.x) / dn) * 14 * k, y: fm.y + ((fm.y - hm.y) / dn) * 14 * k }
+    ctx.font = `700 ${14 * k}px -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif`
+    ctx.textAlign = fm.x >= hm.x ? 'left' : 'right'
+    ctx.textBaseline = 'middle'
+    ctx.lineWidth = 4 * k
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+    ctx.strokeText(text, q.x, q.y)
+    ctx.fillStyle = C_CAGE
+    ctx.fillText(text, q.x, q.y)
+  } else {
+    const s = pts.map(S)
+    for (let i = 0; i + 1 < s.length; i += 2) line(s[i], s[i + 1], C_CAGE, 2)
+  }
+  if (rings || !isCage(c)) {
+    for (const p of pts.map(S)) {
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 7 * k, 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'
+      ctx.lineWidth = 4 * k
+      ctx.stroke()
+      ctx.strokeStyle = C_CAGE
+      ctx.lineWidth = 2 * k
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 1.3 * k, 0, Math.PI * 2)
+      ctx.fillStyle = '#fff'
+      ctx.fill()
+    }
   }
   ctx.restore()
 }

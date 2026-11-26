@@ -4,7 +4,10 @@
 import { describe, it, expect } from 'vitest'
 import { Features, compute } from '../src/sagittal'
 import { rot, Pt } from '../src/geometry'
-import { makeWedge, isWedge, moveFeatures, movePoint, pieces, Wedge } from '../src/osteotomy'
+import {
+  makeWedge, isWedge, moveFeatures, movePoint, pieces, Wedge, makeCage, isCage, cageCut, psoCut, moveThrough,
+  moveFeaturesThrough, Cut, fromBelow,
+} from '../src/osteotomy'
 
 const P = (x: number, y: number) => ({ x, y })
 
@@ -115,5 +118,95 @@ describe('PSO wedge', () => {
     // The bone between the cuts belongs to neither.
     const inWedge = P(470, 790)
     expect(inside(moving, inWedge) || inside(still, inWedge)).toBe(false)
+  })
+})
+
+/** The L4-5 disc of the same film: the upper endplate (L4's lower one) and the lower (L5's upper one), front first. */
+const DISC = [P(562, 925), P(452, 920), P(564, 945), P(454, 932)]
+
+describe('interbody cage', () => {
+  const withCuts = (f: Features, cuts: Cut[], tilt = 0) => {
+    const before = compute(f, { tilt })
+    return { before, after: compute(moveFeaturesThrough(f, cuts), { tilt, facing: before.facing }) }
+  }
+  const c = makeCage(DISC, 1)
+  if (!isCage(c)) throw new Error('no cage')
+
+  it('reads the disc angle between its endplates, front taller positive', () => {
+    // upper endplate rises 5 over 110 towards the back, lower 13 over 110
+    const expected = ((Math.atan2(13, 110) - Math.atan2(5, 110)) * 180) / Math.PI
+    expect(c.deg).toBeCloseTo(expected, 9)
+    expect(c.deg).toBeGreaterThan(0)
+  })
+
+  it('adds the change in disc angle to LL and L4-S1, and leaves the pelvis alone', () => {
+    const { before, after } = withCuts(F, [cageCut(c, c.deg + 10)])
+    expect(val(after, 'LL') - val(before, 'LL')).toBeCloseTo(10, 9)
+    expect(val(after, 'L4S1') - val(before, 'L4S1')).toBeCloseTo(10, 9)
+    for (const k of ['PI', 'PT', 'SS']) expect(val(after, k)).toBeCloseTo(val(before, k), 9)
+    for (const k of ['L1PA', 'T4PA', 'TPA']) expect(val(after, k)).toBeLessThan(val(before, k))
+  })
+
+  it('sets the disc to the angle asked for, turning about the back of the disc', () => {
+    const cut = cageCut(c, 18)
+    const moved = DISC.map((p) => moveThrough([cut], p))
+    const c2 = makeCage(moved, 1)
+    if (!isCage(c2)) throw new Error('no cage after')
+    expect(c2.deg).toBeCloseTo(18, 9)
+    // The lower endplate stays; the middle of the back corners is the hinge.
+    expect(moved[2]).toEqual(DISC[2])
+    expect(moved[3]).toEqual(DISC[3])
+    expect(moveThrough([cut], c.h)).toEqual(c.h)
+  })
+
+  it('does not care in which order the corners come, within or between the endplates', () => {
+    const c2 = makeCage([DISC[3], DISC[2], DISC[1], DISC[0]], 1)
+    if (!isCage(c2)) throw new Error('no cage')
+    expect(c2.deg).toBeCloseTo(c.deg, 9)
+    expect(c2.h).toEqual(c.h)
+  })
+
+  it('works the same on a film facing left, and on a levelled photo', () => {
+    const m = (p: Pt) => P(1000 - p.x, p.y)
+    const cm = makeCage(DISC.map(m), -1)
+    if (!isCage(cm)) throw new Error('no cage')
+    expect(cm.deg).toBeCloseTo(c.deg, 9)
+    const r = withCuts(mapAll(F, m), [cageCut(cm, cm.deg + 10)])
+    expect(val(r.after, 'LL') - val(r.before, 'LL')).toBeCloseTo(10, 9)
+
+    const t = (p: Pt) => rot(p, 20)
+    const ct = makeCage(DISC.map(t), 1, -20)
+    if (!isCage(ct)) throw new Error('no cage')
+    expect(ct.deg).toBeCloseTo(c.deg, 9)
+    const rt = withCuts(mapAll(F, t), [cageCut(ct, ct.deg + 10, -20)], -20)
+    expect(val(rt.after, 'LL') - val(rt.before, 'LL')).toBeCloseTo(10, 9)
+    expect(val(rt.after, 'PT')).toBeCloseTo(val(rt.before, 'PT'), 9)
+  })
+
+  it('adds up with a PSO above it', () => {
+    const w = makeWedge(HINGE, BACK_UP, BACK_LOW)
+    if (!isWedge(w)) throw new Error('no wedge')
+    const { before, after } = withCuts(F, [psoCut(w, 1), cageCut(c, c.deg + 10)])
+    expect(val(after, 'LL') - val(before, 'LL')).toBeCloseTo(w.deg + 10, 9)
+    expect(val(after, 'L4S1') - val(before, 'L4S1')).toBeCloseTo(10, 9)
+    // Either order of the cuts gives the same.
+    const again = withCuts(F, [cageCut(c, c.deg + 10), psoCut(w, 1)])
+    expect(val(again.after, 'TPA')).toBeCloseTo(val(after, 'TPA'), 9)
+  })
+
+  it('puts a PSO at L5 above a steep L5-S1 cage, though the hinge of the cage sits higher', () => {
+    // L5 tilted 35 degrees, its PSO hinge at the front wall; the L5-S1 disc below it, its back corners higher up.
+    const pso = makeWedge(P(518.4, 912.9), P(488.7, 877.0), P(474.5, 897.2))
+    const disc = makeCage([P(510.4, 924.4), P(473.5, 898.6), P(503.4, 934.2), P(469.0, 905.2)], 1)
+    if (!isWedge(pso) || !isCage(disc)) throw new Error('no plan')
+    const a = psoCut(pso, 1)
+    const b = cageCut(disc, disc.deg + 8)
+    expect(b.level).toBeGreaterThan(a.level)
+    expect(fromBelow([a, b]).map((c) => c.kind)).toEqual(['cage', 'pso'])
+    expect(fromBelow([b, a]).map((c) => c.kind)).toEqual(['cage', 'pso'])
+  })
+
+  it('refuses a disc that runs up and down the picture', () => {
+    expect(makeCage([P(500, 800), P(500, 900), P(520, 800), P(520, 900)], 1)).toBe('vertical')
   })
 })

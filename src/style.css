@@ -195,8 +195,15 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 #hint-actions button { min-height: 44px; }
 /* The PSO's closing slider: wide enough to drag with a thumb, in the wedge's colour. */
 #hint-actions input[type='range'] { width: min(44vw, 260px); min-height: 44px; margin: 0 4px; accent-color: #ff6b6b; touch-action: none; }
-/* Before and after in Results' PSO section. */
-#results-body .res.pso .val { white-space: nowrap; }
+/* The cage's disc-angle slider, in the cage's colour, with one-degree steps either side. The text gets its own line. */
+#hint-actions #in-cage { accent-color: #5ad1ff; }
+#hint.two { flex-wrap: wrap; }
+#hint.two #hint-text { flex: 1 1 100%; }
+#hint.two #hint-actions { flex: 1 1 100%; }
+#hint.two #hint-actions input[type='range'] { flex: 1 1 auto; width: auto; min-width: 0; }
+#hint-actions button.step { min-width: 44px; padding: 0; font-size: 20px; }
+/* Before and after in Results' plan section. */
+#results-body .res.plan .val { white-space: nowrap; }
 
 #toast {
   position: absolute;

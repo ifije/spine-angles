@@ -2,10 +2,13 @@
 // Copyright (C) 2026 Wolfray Applied Technologies, LLC
 
 import './style.css'
-import { Pt, dist, mid } from './geometry'
+import { Pt, dist, mid, rot } from './geometry'
 import { Doc, Mat, Measure, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, isDone, measureText } from './model'
-import { drawOverlay, colorFor, drawCut, drawWedge } from './draw'
-import { Wedge, WedgeProblem, makeWedge, isWedge, moveLinePoints, moveFeatures } from './osteotomy'
+import { drawOverlay, colorFor, drawPieces, drawWedge, drawCage } from './draw'
+import {
+  Wedge, WedgeProblem, makeWedge, isWedge, Cage, CageProblem, makeCage, isCage, Cut, psoCut, cageCut, moveThrough,
+  moveFeaturesThrough, moveLinesThrough,
+} from './osteotomy'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
 import { buildLabels, hasLabels, readLabels } from './labels'
@@ -41,10 +44,14 @@ let nextId = 1
 const view = { s: 1, tx: 0, ty: 0 }
 let tone: Tone = { brightness: 1, contrast: 1, invert: false }
 
-type Tool = ToolKind | 'guided' | 'pso' | null
+type Tool = ToolKind | 'guided' | 'pso' | 'cage' | null
 let tool: Tool = null
 /** How far the planned osteotomy is closed: 0 open, 1 closed. Not part of the document, so undo leaves it. */
 let psoClose = 0
+/** Whether the cage's change of the disc angle is shown on the photo (it is put back while points are tapped). */
+let cageShown = true
+/** The PSO and Cage tools plan on the photo; while one is out the landmarks are hidden. */
+const planTool = (t: Tool) => t === 'pso' || t === 'cage'
 /** Free measurement currently being placed. */
 let activeId: number | null = null
 let selected: number | null = null
@@ -130,26 +137,78 @@ const sagittal = () => compute(doc.features, { tilt: doc.tilt, facing: facingOve
 /** The planned osteotomy once its three points are there (or why they make no wedge), else null. */
 const wedge = (): Wedge | WedgeProblem | null =>
   doc.pso?.length === 3 ? makeWedge(doc.pso[0], doc.pso[1], doc.pso[2], doc.tilt) : null
-/** The wedge, when it is (partly) closed. */
-function closedWedge(): Wedge | null {
-  const w = wedge()
-  return isWedge(w) && psoClose > 0 ? w : null
+/**
+ * Which way the patient faces, for the cage: the Facing button, else the landmarks' endplates, else the cage's own taps
+ * (the front corner of each endplate is asked for first).
+ */
+function cageFacing(): number {
+  if (facingOverride) return facingOverride
+  if (FEATURES.some((f) => f.plane === 'sagittal' && f.kind === 'line' && isComplete(doc.features, f.id))) return sagittal().facing
+  const P = doc.cage?.pts ?? []
+  let v = 0
+  for (let i = 0; i + 1 < P.length; i += 2) v += Math.sign(rot(P[i], doc.tilt).x - rot(P[i + 1], doc.tilt).x)
+  return v < 0 ? -1 : 1
 }
-/** The document as shown: with the wedge closed, everything above it moved with its piece of the spine. */
+/** The planned cage once its four points are there (or why they make none), else null. */
+const cage = (): Cage | CageProblem | null =>
+  doc.cage?.pts.length === 4 ? makeCage(doc.cage.pts, doc.cage.facing ?? cageFacing(), doc.tilt) : null
+/** The angle the cage sets the disc to: its own angle until it is changed. */
+function cageTarget(): number | null {
+  const c = cage()
+  return isCage(c) ? doc.cage!.target ?? c.deg : null
+}
+/** The plan's cuts as shown on the photo: the PSO as far as it is closed, the cage when shown and changing the disc. */
+function shownCuts(): Cut[] {
+  const cuts: Cut[] = []
+  const w = wedge()
+  if (isWedge(w) && psoClose > 0) cuts.push(psoCut(w, psoClose, doc.tilt))
+  const c = cage()
+  const tg = cageTarget()
+  if (isCage(c) && cageShown && tg !== null && Math.abs(tg - c.deg) > 1e-9) cuts.push(cageCut(c, tg, doc.tilt))
+  return cuts
+}
+/** The whole plan: the PSO closed, the cage at its angle. */
+function plannedCuts(): Cut[] {
+  const cuts: Cut[] = []
+  const w = wedge()
+  if (isWedge(w)) cuts.push(psoCut(w, 1, doc.tilt))
+  const c = cage()
+  const tg = cageTarget()
+  if (isCage(c) && tg !== null) cuts.push(cageCut(c, tg, doc.tilt))
+  return cuts
+}
+const hasPlan = () => isWedge(wedge()) || isCage(cage())
+/** The document as shown: with the plan shown, everything above each cut moved with its piece of the spine. */
 function shownDoc(): Doc {
-  const w = closedWedge()
-  if (!w) return doc
+  const cuts = shownCuts()
+  if (!cuts.length) return doc
   return {
     ...doc,
-    features: moveFeatures(doc.features, w, psoClose),
-    measures: doc.measures.map((m) => ({ ...m, pts: moveLinePoints(m.pts, w, psoClose, m.kind !== 'angle3') })),
+    features: moveFeaturesThrough(doc.features, cuts),
+    measures: doc.measures.map((m) => ({ ...m, pts: moveLinesThrough(m.pts, cuts, m.kind !== 'angle3') })),
   }
 }
-/** The guided results as shown (after the osteotomy, as far as it is closed). Facing is the photo's own. */
+/** The guided results with these cuts made. Facing is the photo's own. */
+const sagittalWith = (cuts: Cut[]) =>
+  compute(moveFeaturesThrough(doc.features, cuts), { tilt: doc.tilt, facing: facingOverride || sagittal().facing, age })
+/** The guided results as shown. */
 function shownSagittal() {
-  const w = closedWedge()
-  if (!w) return sagittal()
-  return compute(moveFeatures(doc.features, w, psoClose), { tilt: doc.tilt, facing: facingOverride || sagittal().facing, age })
+  const cuts = shownCuts()
+  return cuts.length ? sagittalWith(cuts) : sagittal()
+}
+
+/** The plan's own marks (the PSO's wedge, the cage's disc), each carried by the other cuts as shown. */
+function drawPlanMarks(ctx: CanvasRenderingContext2D, M: Mat, k: number, onScreen: boolean) {
+  const cuts = shownCuts()
+  if (doc.pso?.length) {
+    const others = cuts.filter((c) => c.kind !== 'pso')
+    drawWedge(ctx, M, doc.pso, wedge(), psoClose, k, onScreen && tool === 'pso' && !cuts.length, (p) => moveThrough(others, p))
+  }
+  if (doc.cage?.pts.length) {
+    const others = cuts.filter((c) => c.kind !== 'cage')
+    const own = cuts.find((x) => x.kind === 'cage')
+    drawCage(ctx, M, doc.cage.pts, cage(), cageTarget(), own ? own.turn : 0, k, onScreen && tool === 'cage' && !cuts.length, (p) => moveThrough(others, p))
+  }
 }
 
 // ---------------------------------------------------------------- drawing
@@ -173,12 +232,12 @@ function draw() {
   if (!src) return
   ictx.setTransform(M[0] * dpr, M[1] * dpr, M[2] * dpr, M[3] * dpr, M[4] * dpr, M[5] * dpr)
   ictx.imageSmoothingQuality = 'high'
-  const cw = closedWedge()
-  if (cw) drawCut(ictx, src, cw, psoClose, 0.25)
+  const cuts = shownCuts()
+  if (cuts.length) drawPieces(ictx, src, cuts, 0.25)
   else ictx.drawImage(src, 0, 0)
-  // While the PSO tool is out, only the photo and the wedge: the landmarks come back, moved, with Done.
-  if (tool !== 'pso') drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
-  if (doc.pso?.length) drawWedge(octx, M, doc.pso, wedge(), psoClose, 1, tool === 'pso' && psoClose === 0)
+  // While a planning tool is out, only the photo and the plan: the landmarks come back, moved, with Done.
+  if (!planTool(tool)) drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
+  drawPlanMarks(octx, M, 1, true)
   if (loupeAt) drawLoupe()
 }
 
@@ -197,8 +256,8 @@ function drawLoupe() {
   const lo = cvLoupeOverlay.getContext('2d')!
   lo.setTransform(dpr, 0, 0, dpr, 0, 0)
   lo.clearRect(0, 0, LOUPE, LOUPE)
-  if (tool !== 'pso') drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
-  if (doc.pso?.length) drawWedge(lo, M, doc.pso, wedge(), 0, 1, true)
+  if (!planTool(tool)) drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
+  drawPlanMarks(lo, M, 1, true)
   // Crosshair ticks, leaving the centre clear.
   for (const [color, width] of [['rgba(0,0,0,0.7)', 3], ['#fff', 1]] as const) {
     lo.strokeStyle = color
@@ -313,7 +372,7 @@ function undo() {
   }
   if (selected !== null && !doc.measures.some((m) => m.id === selected)) selected = null
   // A measuring tool brought back by undo works on the photo as it is.
-  if (tool && tool !== 'pso') openWedge()
+  if (placing()) openPlan()
   syncAdjustInputs()
   // Undone past everything the prompts asked for: the prompts are over.
   if (tool === 'guided' && !currentStep()) return finishGuided()
@@ -336,26 +395,33 @@ function dropPartials() {
   const partialM = doc.measures.some((m) => !isDone(m))
   const partialF = FEATURES.some((f) => doc.features[f.id] && !isComplete(doc.features, f.id))
   const partialP = !!doc.pso && doc.pso.length < 3
-  if (!partialM && !partialF && !partialP) return
+  const partialC = !!doc.cage && doc.cage.pts.length < 4
+  if (!partialM && !partialF && !partialP && !partialC) return
   pushUndo()
   doc.measures = doc.measures.filter(isDone)
   for (const f of FEATURES) if (!isComplete(doc.features, f.id)) delete doc.features[f.id]
   if (partialP) delete doc.pso
+  if (partialC) delete doc.cage
   activeId = null
 }
 
-/** Other tools work on the photo as it is: a closed wedge is opened first. */
-function openWedge() {
-  if (!closedWedge()) return
+/** The tool out places points by tapping the photo (rather than working a slider). */
+const placing = () =>
+  !!tool && (tool === 'pso' ? (doc.pso?.length ?? 0) < 3 : tool === 'cage' ? (doc.cage?.pts.length ?? 0) < 4 : true)
+
+/** Taps work on the photo as it is: a plan that moves the picture is put back first. It stays planned. */
+function openPlan() {
+  if (!shownCuts().length) return
   psoClose = 0
   psoSlider.value = '0'
-  toast('PSO opened to place points')
+  cageShown = false
+  toast('Plan opened to place points')
 }
 
 function armTool(kind: ToolKind) {
   if (!src) return toast('Choose a photo first')
   const wasOn = tool === kind
-  if (!wasOn) openWedge()
+  if (!wasOn) openPlan()
   dropPartials()
   tool = wasOn ? null : kind
   activeId = null
@@ -374,23 +440,40 @@ const PSO_PROMPTS = [
 
 /** The PSO button: start placing the wedge, or show its slider again; tapped again, put it away. */
 function armPso() {
+  armPlan('pso')
+}
+
+/** A planning tool's button: start placing its points, or show its slider again; tapped again, put it away. */
+function armPlan(which: 'pso' | 'cage') {
   if (!src) return toast('Choose a photo first')
-  if (tool === 'pso') return finishPso()
+  if (tool === which) return finishPlan()
   dropPartials()
-  tool = 'pso'
+  tool = which
   activeId = null
   selected = null
   selectedFeature = null
+  if (placing()) openPlan()
+  else if (which === 'cage') cageShown = true
   openSheet(null)
   refresh()
   if (doc.measures.length || Object.keys(doc.features).length) toast('Landmarks hidden while you plan; Done brings them back')
 }
 
-/** Done: the wedge stays as it is (open or closed) and Results shows what it changes. */
-function finishPso() {
+/** Done: the plan stays as it is and Results shows what it changes. */
+function finishPlan() {
   dropPartials()
   tool = null
-  openSheet(isWedge(wedge()) ? 'results' : null)
+  openSheet(hasPlan() ? 'results' : null)
+  refresh()
+}
+
+function removePlan() {
+  if (!doc.pso && !doc.cage) return
+  pushUndo()
+  delete doc.pso
+  delete doc.cage
+  psoClose = 0
+  if (planTool(tool)) tool = null
   refresh()
 }
 
@@ -403,8 +486,8 @@ function removePso() {
   refresh()
 }
 
-/** A finger is on the closing slider: the hint bar is not rebuilt under it (iOS can drop a drag whose element is moved). */
-let psoSliding = false
+/** A finger is on a plan's slider: the hint bar is not rebuilt under it (iOS can drop a drag whose element is moved). */
+let planSliding = false
 /** The closing slider lives in the hint bar. It is made once, so that redrawing the hint never takes it from under a finger. */
 const psoSlider = document.createElement('input')
 psoSlider.type = 'range'
@@ -422,15 +505,87 @@ psoSlider.addEventListener('input', () => {
   requestDraw()
 })
 psoSlider.addEventListener('change', () => {
-  psoSliding = false
+  planSliding = false
   refresh()
 })
-psoSlider.addEventListener('pointerdown', () => (psoSliding = true))
-psoSlider.addEventListener('pointerup', () => (psoSliding = false))
-psoSlider.addEventListener('pointercancel', () => (psoSliding = false))
+psoSlider.addEventListener('pointerdown', () => (planSliding = true))
+psoSlider.addEventListener('pointerup', () => (planSliding = false))
+psoSlider.addEventListener('pointercancel', () => (planSliding = false))
 
 function psoText(w: Wedge): string {
   return psoClose === 0 ? `PSO ${Math.round(w.deg)}°: slide to close` : `PSO ${Math.round(w.deg)}°, ${Math.round(psoClose * 100)}% closed`
+}
+
+// ---------------------------------------------------------------- interbody cage
+
+const CAGE_PROMPTS = [
+  'tap the front corner of the upper endplate of the disc',
+  'tap its back corner',
+  'tap the front corner of the lower endplate',
+  'tap its back corner',
+]
+
+function armCage() {
+  armPlan('cage')
+}
+
+function removeCage() {
+  if (!doc.cage) return
+  pushUndo()
+  delete doc.cage
+  if (tool === 'cage') tool = null
+  refresh()
+}
+
+/** The disc-angle slider, made once like the PSO's. A change is one undo step, taken when the finger lifts. */
+const cageSlider = document.createElement('input')
+cageSlider.type = 'range'
+cageSlider.id = 'in-cage'
+cageSlider.step = '1'
+cageSlider.setAttribute('aria-label', 'The disc angle the cage sets')
+let cageBefore: string | null = null
+cageSlider.addEventListener('input', () => {
+  if (!doc.cage) return
+  if (cageBefore === null) cageBefore = snapshot()
+  setCageTarget(Number(cageSlider.value))
+  cageShown = true
+  const c = cage()
+  if (isCage(c)) $('hint-text').textContent = cageText(c)
+  requestDraw()
+})
+/** The finger lifts (or the browser says the value changed): one undo step, if anything changed. */
+function endCageSlide() {
+  if (cageBefore !== null && cageBefore !== snapshot()) pushUndo(cageBefore)
+  cageBefore = null
+  planSliding = false
+  refresh()
+}
+cageSlider.addEventListener('change', endCageSlide)
+cageSlider.addEventListener('pointerdown', () => (planSliding = true))
+cageSlider.addEventListener('pointerup', endCageSlide)
+cageSlider.addEventListener('pointercancel', endCageSlide)
+
+/** One degree more or less, from the buttons beside the slider. */
+function stepCage(by: number) {
+  const tg = cageTarget()
+  if (tg === null || !doc.cage) return
+  pushUndo()
+  setCageTarget(Math.round(tg) + by)
+  cageShown = true
+  refresh()
+}
+
+/** Whole degrees; the whole degree nearest the disc's measured angle means the disc as measured. */
+function setCageTarget(v: number) {
+  const c = cage()
+  if (!doc.cage || !isCage(c)) return
+  if (v === Math.round(c.deg)) delete doc.cage.target
+  else doc.cage.target = v
+}
+
+function cageText(c: Cage): string {
+  const tg = cageTarget() ?? c.deg
+  return Math.round(tg) === Math.round(c.deg) ? `Cage: disc ${Math.round(c.deg)}°, slide to change` : `Cage: disc ${Math.round(c.deg)}° → ${Math.round(tg)}°`
 }
 
 /**
@@ -438,7 +593,7 @@ function psoText(w: Wedge): string {
  * measurement's panel. `again` is a landmark that is there already and is to be placed anew: it stays until the first tap.
  */
 function placeLandmarks(ids: FeatureId[], title: string, again: FeatureId | null = null) {
-  openWedge()
+  openPlan()
   dropPartials()
   // A second femoral head that was skipped stays skipped until landmarks are cleared, unless it is asked for.
   const keepFh2 = skipped.has('fh2') && isComplete(doc.features, 'fh1') && !ids.includes('fh2')
@@ -507,6 +662,18 @@ function onTap(screen: Pt) {
     pushUndo()
     ;(doc.pso ??= []).push(p)
     if (doc.pso.length === 3) psoClose = 0
+    refresh()
+    return
+  }
+  if (tool === 'cage') {
+    if ((doc.cage?.pts.length ?? 0) >= 4) return
+    pushUndo()
+    ;(doc.cage ??= { pts: [] }).pts.push(p)
+    if (doc.cage.pts.length === 4) {
+      // Which way the patient faces is settled now, so a later landmark or guess cannot turn the cage round.
+      doc.cage.facing = cageFacing() < 0 ? -1 : 1
+      cageShown = true
+    }
     refresh()
     return
   }
@@ -663,7 +830,7 @@ function clearGroup(group: 'basic' | Plane) {
     doc.measures = []
     selected = null
     activeId = null
-    if (tool && tool !== 'guided' && tool !== 'pso') tool = null
+    if (tool && tool !== 'guided' && !planTool(tool)) tool = null
   } else {
     for (const f of FEATURES) if (f.plane === group) delete doc.features[f.id]
     selectedFeature = null
@@ -674,11 +841,12 @@ function clearGroup(group: 'basic' | Plane) {
 }
 
 function clearAll() {
-  if (!doc.measures.length && !Object.keys(doc.features).length && !doc.pso) return
+  if (!doc.measures.length && !Object.keys(doc.features).length && !doc.pso && !doc.cage) return
   pushUndo()
   doc.measures = []
   doc.features = {}
   delete doc.pso
+  delete doc.cage
   psoClose = 0
   skipped.clear()
   tool = null
@@ -708,13 +876,18 @@ function hitHandle(screen: Pt, radius: number): Handle | null {
       best = h
     }
   }
-  // With the wedge closed, points are drawn away from where they are kept: nothing is dragged until it is opened.
-  if (psoClose > 0 && isWedge(wedge())) return null
+  // With the plan shown, points are drawn away from where they are kept: nothing is dragged until it is put back.
+  if (shownCuts().length) return null
   // With the PSO tool out the landmarks are hidden, so only the wedge's points can be dragged; while its three points go
   // down, every tap places one (two back points can be a few pixels apart).
   if (tool === 'pso') {
     if ((doc.pso?.length ?? 0) < 3) return null
     doc.pso!.forEach((_, i) => consider({ pts: doc.pso!, i }))
+    return best
+  }
+  if (tool === 'cage') {
+    if ((doc.cage?.pts.length ?? 0) < 4) return null
+    doc.cage!.pts.forEach((_, i) => consider({ pts: doc.cage!.pts, i }))
     return best
   }
   for (const m of doc.measures) m.pts.forEach((_, i) => consider({ pts: m.pts, i, measureId: m.id }))
@@ -726,6 +899,8 @@ function moveHandle(h: Handle, p: Pt) {
   const old = h.pts[h.i]
   // A guess that has been moved is the user's landmark from then on.
   if (h.feature && doc.auto) delete doc.auto[h.feature]
+  // A cage's corner moved: the disc is measured anew, and its angle is left as measured.
+  if (doc.cage && h.pts === doc.cage.pts) delete doc.cage.target
   h.pts[h.i] = p
   // Dragging a femoral head's centre carries its rim point with it.
   if (h.feature && FEATURE_BY_ID[h.feature].kind === 'circle' && h.i === 0 && h.pts[1]) {
@@ -901,12 +1076,15 @@ function measureName(m: Measure): string {
 function updateHint() {
   const hint = $('hint')
   const actions = $('hint-actions')
-  if (psoSliding && tool === 'pso') {
+  if (planSliding && planTool(tool)) {
     const w = wedge()
-    if (isWedge(w)) $('hint-text').textContent = psoText(w)
+    const c = cage()
+    if (tool === 'pso' && isWedge(w)) $('hint-text').textContent = psoText(w)
+    if (tool === 'cage' && isCage(c)) $('hint-text').textContent = cageText(c)
     return
   }
   actions.replaceChildren()
+  hint.classList.remove('two')
   let text = ''
   if (src && tool === 'guided') {
     const cur = currentStep()
@@ -924,13 +1102,31 @@ function updateHint() {
       actions.append(button('Cancel', armPso))
     } else if (!isWedge(w)) {
       text = w === 'thin' ? 'PSO: the two cuts lie on one line. Drag a back point.' : 'PSO: the wedge should open towards the back. Put the hinge at the front, both back points behind it.'
-      actions.append(button('Remove', removePso, 'danger'), button('Done', finishPso))
+      actions.append(button('Remove', removePso, 'danger'), button('Done', finishPlan))
     } else {
       text = psoText(w)
       psoSlider.value = String(Math.round(psoClose * 100))
-      actions.append(psoSlider, button('Done', finishPso))
+      actions.append(psoSlider, button('Done', finishPlan))
     }
-  } else if (src && tool && tool !== 'guided' && tool !== 'pso') {
+  } else if (src && tool === 'cage') {
+    const n = doc.cage?.pts.length ?? 0
+    const c = cage()
+    if (n < 4) {
+      text = `Cage ${n + 1}/4: ${CAGE_PROMPTS[n]}`
+      actions.append(button('Cancel', armCage))
+    } else if (!isCage(c)) {
+      text = 'Cage: the disc should run across the spine. Drag its corners.'
+      actions.append(button('Remove', removeCage, 'danger'), button('Done', finishPlan))
+    } else {
+      text = cageText(c)
+      const tg = Math.round(cageTarget() ?? c.deg)
+      cageSlider.min = String(Math.min(-10, Math.round(c.deg) - 10))
+      cageSlider.max = String(Math.max(40, Math.round(c.deg) + 10))
+      cageSlider.value = String(tg)
+      hint.classList.add('two')
+      actions.append(button('−', () => stepCage(-1), 'step'), cageSlider, button('+', () => stepCage(1), 'step'), button('Done', finishPlan))
+    }
+  } else if (src && tool && !planTool(tool) && tool !== 'guided') {
     const n = doc.measures.find((m) => m.id === activeId)?.pts.length ?? 0
     text = `${TOOL_NAME[tool]} ${n + 1}/${NEED[tool]}: ${FREE_PROMPTS[tool][n]}`
     const kind = tool
@@ -986,8 +1182,7 @@ function renderResults() {
     }
   }
   const sag = sagittal()
-  const w = wedge()
-  if (plane === 'sagittal' && isWedge(w)) renderPso(body, w, sag)
+  if (plane === 'sagittal' && hasPlan()) renderPlan(body, sag)
   const shown = sag.results.filter((r) => r.plane === plane)
   const hasLandmarks = FEATURES.some((f) => f.plane === plane && doc.features[f.id])
   body.append(sectionHead(plane === 'sagittal' ? 'Sagittal parameters' : 'Coronal parameters', hasLandmarks ? () => clearGroup(plane) : null))
@@ -1013,43 +1208,65 @@ function renderResults() {
   $('btn-facing').textContent = `Facing ${sag.facing > 0 ? 'right' : 'left'}${facingOverride ? '' : ' (auto)'}`
 }
 
-/** The measures a PSO is planned by: always listed when they can be measured. */
-const PSO_KEYS = ['LL', 'L4S1', 'PI-LL', 'L1PA', 'T4PA', 'TPA']
+/** The measures a plan is judged by: always listed when they can be measured. */
+const PLAN_KEYS = ['LL', 'L4S1', 'PI-LL', 'L1PA', 'T4PA', 'TPA']
 /** The pelvis's own measures, which the plan holds still. */
 const PELVIS_KEYS = ['PI', 'PT', 'SS']
 
-/** What the wedge does: each sagittal measure before and after it is closed (those it leaves alone are skipped). */
-function psoChanges(w: Wedge, before = sagittal()): { before: Result; after: Result }[] {
-  const after = compute(moveFeatures(doc.features, w, 1), { tilt: doc.tilt, facing: facingOverride || before.facing, age })
+/** The plan's steps, each with what it does and a way to take it out. */
+function planSteps(): { name: string; value: string; remove: () => void }[] {
+  const out: { name: string; value: string; remove: () => void }[] = []
+  const w = wedge()
+  if (isWedge(w)) out.push({ name: 'PSO wedge', value: `${w.deg.toFixed(1)}°`, remove: removePso })
+  const c = cage()
+  if (isCage(c)) out.push({ name: 'Cage: disc angle', value: `${c.deg.toFixed(1)}° → ${(cageTarget() ?? c.deg).toFixed(1)}°`, remove: removeCage })
+  return out
+}
+
+/** What the whole plan does: each sagittal measure before and after it (those it leaves alone are skipped). */
+function planChanges(before = sagittal()): { before: Result; after: Result }[] {
+  const after = sagittalWith(plannedCuts())
   const out: { before: Result; after: Result }[] = []
   for (const b of before.results) {
     if (b.plane !== 'sagittal' || PELVIS_KEYS.includes(b.key)) continue
     const a = after.results.find((r) => r.key === b.key)
-    if (!a || (!PSO_KEYS.includes(b.key) && Math.abs(a.value - b.value) < 0.05)) continue
+    if (!a || (!PLAN_KEYS.includes(b.key) && Math.abs(a.value - b.value) < 0.05)) continue
     out.push({ before: b, after: a })
   }
   return out
 }
 
-/** Results' PSO section: the wedge, and each measure it changes before and after the wedge is closed. */
-function renderPso(body: HTMLElement, w: Wedge, before: ReturnType<typeof compute>) {
-  body.append(sectionHead('PSO plan', removePso))
-  const row = el('div', 'res pso')
-  row.append(el('div', 'name', 'Wedge'), el('div', 'val', `${w.deg.toFixed(1)}°`), el('span', ''))
-  body.append(row)
-  const changes = psoChanges(w, before)
-  const any = changes.length > 0
+/** Results' plan section: each step, then each measure before and after the whole plan. */
+function renderPlan(body: HTMLElement, before: ReturnType<typeof compute>) {
+  body.append(sectionHead('Plan', removePlan))
+  for (const s of planSteps()) {
+    const row = el('div', 'res plan')
+    row.append(el('div', 'name', s.name), el('div', 'val', s.value), button('✕', s.remove))
+    body.append(row)
+  }
+  const changes = planChanges(before)
   for (const { before: b, after: a } of changes) {
-    const r = el('div', 'res pso')
+    const r = el('div', 'res plan')
     const name = el('div', 'name', b.label)
     const d = a.value - b.value
     name.append(el('small', '', `${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(b.unit === '%' ? 0 : 1)}${b.unit}`))
     r.append(name, el('div', 'val', `${formatValue(b)} → ${formatValue(a)}`), el('span', ''))
     body.append(r)
   }
-  body.append(el('div', 'empty-note', any
-    ? 'Everything above the wedge turns about the hinge; the pelvis stays where it is. Values on the image follow the slider.'
-    : 'Place S1 and L1 (Guided) to see what the wedge does to lordosis; the femoral heads too for PI − LL and the pelvic angles.'))
+  body.append(el('div', 'empty-note', changes.length
+    ? 'After the whole plan: everything above each cut turns about its hinge; the pelvis stays where it is. The image shows the plan as far as it is shown.'
+    : 'Place S1 and L1 (Guided) to see what the plan does to lordosis; the femoral heads too for PI − LL and the pelvic angles.'))
+}
+
+/** What the Share footer says about the plan, or nothing without one. */
+function planNote(): string | undefined {
+  const parts: string[] = []
+  const w = wedge()
+  if (isWedge(w)) parts.push(`PSO ${Math.round(w.deg)}° ${psoClose >= 1 ? 'closed' : psoClose > 0 ? `${Math.round(psoClose * 100)}% closed` : 'open'}`)
+  const c = cage()
+  const tg = cageTarget()
+  if (isCage(c) && tg !== null) parts.push(`disc ${Math.round(c.deg)}° → ${Math.round(tg)}°${cageShown ? '' : ' (not shown)'}`)
+  return parts.length ? `Plan: ${parts.join('; ')}. Values as shown.` : undefined
 }
 
 /** The state of a guided measurement with the current landmarks (shared by the list, the panel and Results). */
@@ -1288,7 +1505,7 @@ function syncAdjustInputs() {
 // ---------------------------------------------------------------- photo
 
 async function openPhoto(file: Blob) {
-  const hasWork = doc.measures.length > 0 || Object.keys(doc.features).length > 0 || !!doc.pso
+  const hasWork = doc.measures.length > 0 || Object.keys(doc.features).length > 0 || !!doc.pso || !!doc.cage
   if (src && hasWork && !confirm('Replace the current photo and its measurements?')) return
   try {
     src = await loadPhoto(file)
@@ -1301,6 +1518,7 @@ async function openPhoto(file: Blob) {
   tone = { brightness: 1, contrast: 1, invert: false }
   tool = null
   psoClose = 0
+  cageShown = true
   activeId = null
   selected = null
   selectedFeature = null
@@ -1337,6 +1555,7 @@ function transformPhoto(next: HTMLCanvasElement, map: (p: Pt) => Pt) {
   for (const m of doc.measures) m.pts = m.pts.map(map)
   for (const f of FEATURES) if (doc.features[f.id]) doc.features[f.id] = doc.features[f.id]!.map(map)
   if (doc.pso) doc.pso = doc.pso.map(map)
+  if (doc.cage) doc.cage.pts = doc.cage.pts.map(map)
   // Earlier snapshots refer to the old orientation.
   undoStack = []
   fit()
@@ -1689,8 +1908,9 @@ $('btn-results').addEventListener('click', () => toggleSheet('results'))
 
 document.querySelectorAll<HTMLElement>('#tools [data-tool]').forEach((b) => {
   b.addEventListener('click', () => {
-    const t = b.dataset.tool as ToolKind | 'guided' | 'pso'
+    const t = b.dataset.tool as ToolKind | 'guided' | 'pso' | 'cage'
     if (t === 'pso') return armPso()
+    if (t === 'cage') return armCage()
     if (t !== 'guided') return armTool(t)
     if (tool === 'guided') {
       finishGuided()
@@ -1765,6 +1985,12 @@ $('btn-reset').addEventListener('click', () => {
 
 $('btn-facing').addEventListener('click', () => {
   facingOverride = facingOverride ? 0 : -sagittal().facing
+  // A cage follows the photo's facing; its disc is measured anew, so the angle it was set to goes back to as measured.
+  if (doc.cage?.facing !== undefined && doc.cage.facing !== sagittal().facing) {
+    pushUndo()
+    doc.cage.facing = sagittal().facing
+    delete doc.cage.target
+  }
   refresh()
 })
 $('in-age').addEventListener('input', (e) => {
@@ -1773,12 +1999,11 @@ $('in-age').addEventListener('input', (e) => {
   refresh()
 })
 $('btn-copy').addEventListener('click', async () => {
-  const w = wedge()
-  const plan = isWedge(w)
+  const plan = hasPlan()
     ? [
-        { name: 'PSO wedge (planned)', short: 'PSO wedge', value: `${w.deg.toFixed(1)}°`, note: 'the pelvis held still' },
-        ...psoChanges(w).map(({ before: b, after: a }) => ({
-          name: `${a.label} after PSO (${a.key})`, short: `${a.key} after PSO`, value: formatValue(a), note: `before ${formatValue(b)}`,
+        ...planSteps().map((s) => ({ name: `${s.name} (planned)`, short: s.name, value: s.value, note: 'the pelvis held still' })),
+        ...planChanges().map(({ before: b, after: a }) => ({
+          name: `${a.label} after the plan (${a.key})`, short: `${a.key} after plan`, value: formatValue(a), note: `before ${formatValue(b)}`,
         })),
       ]
     : []
@@ -1835,18 +2060,13 @@ $('btn-labels').addEventListener('click', async () => {
 $('btn-share').addEventListener('click', async () => {
   if (!src) return
   try {
-    const w = wedge()
-    const cw = closedWedge()
+    const cuts = shownCuts()
     const photo = src
     const outcome = await exportView({
-      src, doc: shownDoc(), tone, M: viewMat(), W, H, sagittal: shownSagittal(), focus, overlay: tool !== 'pso',
-      paint: cw ? (c) => drawCut(c, photo, cw, psoClose, 0.25) : undefined,
-      decorate: doc.pso?.length ? (c, M, k) => drawWedge(c, M, doc.pso!, w, psoClose, k, false) : undefined,
-      note: isWedge(w)
-        ? psoClose >= 1 ? `PSO ${Math.round(w.deg)}° planned, closed: values after it`
-          : psoClose > 0 ? `PSO ${Math.round(w.deg)}° planned, ${Math.round(psoClose * 100)}% closed: values part way`
-            : `PSO ${Math.round(w.deg)}° planned, open: values before it`
-        : undefined,
+      src, doc: shownDoc(), tone, M: viewMat(), W, H, sagittal: shownSagittal(), focus, overlay: !planTool(tool),
+      paint: cuts.length ? (c) => drawPieces(c, photo, cuts, 0.25) : undefined,
+      decorate: doc.pso?.length || doc.cage?.pts.length ? (c, M, k) => drawPlanMarks(c, M, k, false) : undefined,
+      note: planNote(),
     })
     if (outcome === 'downloaded') toast('Image saved')
   } catch {
@@ -1861,7 +2081,7 @@ document.addEventListener('keydown', (e) => {
     undo()
   } else if (e.key === 'Escape' && tool) {
     if (tool === 'guided') finishGuided()
-    else if (tool === 'pso') finishPso()
+    else if (planTool(tool)) finishPlan()
     else armTool(tool)
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected !== null) {
     deleteMeasure(selected)
