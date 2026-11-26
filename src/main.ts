@@ -4,7 +4,8 @@
 import './style.css'
 import { Pt, dist, mid } from './geometry'
 import { Doc, Mat, Measure, ToolKind, NEED, TOOL_NAME, apply, invert, matrix, isDone, measureText } from './model'
-import { drawOverlay, colorFor } from './draw'
+import { drawOverlay, colorFor, drawCut, drawWedge } from './draw'
+import { Wedge, WedgeProblem, makeWedge, isWedge, moveLinePoints, moveFeatures } from './osteotomy'
 import { loadPhoto, rotate90, flipH, toneCss, Tone } from './image'
 import { exportView, resultsClipboard, copyResults, saveLabels, fileStamp } from './export'
 import { buildLabels, hasLabels, readLabels } from './labels'
@@ -40,8 +41,10 @@ let nextId = 1
 const view = { s: 1, tx: 0, ty: 0 }
 let tone: Tone = { brightness: 1, contrast: 1, invert: false }
 
-type Tool = ToolKind | 'guided' | null
+type Tool = ToolKind | 'guided' | 'pso' | null
 let tool: Tool = null
+/** How far the planned osteotomy is closed: 0 open, 1 closed. Not part of the document, so undo leaves it. */
+let psoClose = 0
 /** Free measurement currently being placed. */
 let activeId: number | null = null
 let selected: number | null = null
@@ -124,6 +127,31 @@ let loupeAt: Pt | null = null
 const viewMat = (): Mat => matrix(view.s, doc.tilt, view.tx, view.ty)
 const sagittal = () => compute(doc.features, { tilt: doc.tilt, facing: facingOverride, age })
 
+/** The planned osteotomy once its three points are there (or why they make no wedge), else null. */
+const wedge = (): Wedge | WedgeProblem | null =>
+  doc.pso?.length === 3 ? makeWedge(doc.pso[0], doc.pso[1], doc.pso[2], doc.tilt) : null
+/** The wedge, when it is (partly) closed. */
+function closedWedge(): Wedge | null {
+  const w = wedge()
+  return isWedge(w) && psoClose > 0 ? w : null
+}
+/** The document as shown: with the wedge closed, everything above it moved with its piece of the spine. */
+function shownDoc(): Doc {
+  const w = closedWedge()
+  if (!w) return doc
+  return {
+    ...doc,
+    features: moveFeatures(doc.features, w, psoClose),
+    measures: doc.measures.map((m) => ({ ...m, pts: moveLinePoints(m.pts, w, psoClose, m.kind !== 'angle3') })),
+  }
+}
+/** The guided results as shown (after the osteotomy, as far as it is closed). Facing is the photo's own. */
+function shownSagittal() {
+  const w = closedWedge()
+  if (!w) return sagittal()
+  return compute(moveFeatures(doc.features, w, psoClose), { tilt: doc.tilt, facing: facingOverride || sagittal().facing, age })
+}
+
 // ---------------------------------------------------------------- drawing
 
 let drawQueued = false
@@ -145,8 +173,11 @@ function draw() {
   if (!src) return
   ictx.setTransform(M[0] * dpr, M[1] * dpr, M[2] * dpr, M[3] * dpr, M[4] * dpr, M[5] * dpr)
   ictx.imageSmoothingQuality = 'high'
-  ictx.drawImage(src, 0, 0)
-  drawOverlay(octx, M, doc, { k: 1, selected, selectedFeature, sag: sagittal(), focus })
+  const cw = closedWedge()
+  if (cw) drawCut(ictx, src, cw, psoClose, 0.25)
+  else ictx.drawImage(src, 0, 0)
+  drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
+  if (doc.pso?.length) drawWedge(octx, M, doc.pso, wedge(), psoClose, 1, tool === 'pso' && psoClose === 0)
   if (loupeAt) drawLoupe()
 }
 
@@ -166,6 +197,7 @@ function drawLoupe() {
   lo.setTransform(dpr, 0, 0, dpr, 0, 0)
   lo.clearRect(0, 0, LOUPE, LOUPE)
   drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
+  if (doc.pso?.length) drawWedge(lo, M, doc.pso, wedge(), 0, 1, true)
   // Crosshair ticks, leaving the centre clear.
   for (const [color, width] of [['rgba(0,0,0,0.7)', 3], ['#fff', 1]] as const) {
     lo.strokeStyle = color
@@ -279,6 +311,8 @@ function undo() {
     activeId = null
   }
   if (selected !== null && !doc.measures.some((m) => m.id === selected)) selected = null
+  // A measuring tool brought back by undo works on the photo as it is.
+  if (tool && tool !== 'pso') openWedge()
   syncAdjustInputs()
   // Undone past everything the prompts asked for: the prompts are over.
   if (tool === 'guided' && !currentStep()) return finishGuided()
@@ -300,16 +334,27 @@ const currentStep = (): FeatureId | undefined =>
 function dropPartials() {
   const partialM = doc.measures.some((m) => !isDone(m))
   const partialF = FEATURES.some((f) => doc.features[f.id] && !isComplete(doc.features, f.id))
-  if (!partialM && !partialF) return
+  const partialP = !!doc.pso && doc.pso.length < 3
+  if (!partialM && !partialF && !partialP) return
   pushUndo()
   doc.measures = doc.measures.filter(isDone)
   for (const f of FEATURES) if (!isComplete(doc.features, f.id)) delete doc.features[f.id]
+  if (partialP) delete doc.pso
   activeId = null
+}
+
+/** Other tools work on the photo as it is: a closed wedge is opened first. */
+function openWedge() {
+  if (!closedWedge()) return
+  psoClose = 0
+  psoSlider.value = '0'
+  toast('PSO opened to place points')
 }
 
 function armTool(kind: ToolKind) {
   if (!src) return toast('Choose a photo first')
   const wasOn = tool === kind
+  if (!wasOn) openWedge()
   dropPartials()
   tool = wasOn ? null : kind
   activeId = null
@@ -318,11 +363,80 @@ function armTool(kind: ToolKind) {
   refresh()
 }
 
+// ---------------------------------------------------------------- osteotomy (PSO)
+
+const PSO_PROMPTS = [
+  'tap the hinge, at the front of the vertebral body',
+  'tap where one cut meets the back wall of the body',
+  'tap where the other cut meets the back wall',
+]
+
+/** The PSO button: start placing the wedge, or show its slider again; tapped again, put it away. */
+function armPso() {
+  if (!src) return toast('Choose a photo first')
+  if (tool === 'pso') return finishPso()
+  dropPartials()
+  tool = 'pso'
+  activeId = null
+  selected = null
+  selectedFeature = null
+  openSheet(null)
+  refresh()
+}
+
+/** Done: the wedge stays as it is (open or closed) and Results shows what it changes. */
+function finishPso() {
+  dropPartials()
+  tool = null
+  openSheet(isWedge(wedge()) ? 'results' : null)
+  refresh()
+}
+
+function removePso() {
+  if (!doc.pso) return
+  pushUndo()
+  delete doc.pso
+  psoClose = 0
+  if (tool === 'pso') tool = null
+  refresh()
+}
+
+/** A finger is on the closing slider: the hint bar is not rebuilt under it (iOS can drop a drag whose element is moved). */
+let psoSliding = false
+/** The closing slider lives in the hint bar. It is made once, so that redrawing the hint never takes it from under a finger. */
+const psoSlider = document.createElement('input')
+psoSlider.type = 'range'
+psoSlider.id = 'in-pso'
+psoSlider.min = '0'
+psoSlider.max = '100'
+psoSlider.step = '1'
+psoSlider.value = '0'
+psoSlider.setAttribute('aria-label', 'How far the wedge is closed')
+psoSlider.addEventListener('input', () => {
+  psoClose = Number(psoSlider.value) / 100
+  // Only the picture and the hint's text follow while sliding; the rest catches up when the finger lifts.
+  const w = wedge()
+  if (isWedge(w)) $('hint-text').textContent = psoText(w)
+  requestDraw()
+})
+psoSlider.addEventListener('change', () => {
+  psoSliding = false
+  refresh()
+})
+psoSlider.addEventListener('pointerdown', () => (psoSliding = true))
+psoSlider.addEventListener('pointerup', () => (psoSliding = false))
+psoSlider.addEventListener('pointercancel', () => (psoSliding = false))
+
+function psoText(w: Wedge): string {
+  return psoClose === 0 ? `PSO ${Math.round(w.deg)}°: slide to close` : `PSO ${Math.round(w.deg)}°, ${Math.round(psoClose * 100)}% closed`
+}
+
 /**
  * Prompt for these landmarks, one tap at a time in the usual order (caudal to cranial), then come back to the open
  * measurement's panel. `again` is a landmark that is there already and is to be placed anew: it stays until the first tap.
  */
 function placeLandmarks(ids: FeatureId[], title: string, again: FeatureId | null = null) {
+  openWedge()
   dropPartials()
   // A second femoral head that was skipped stays skipped until landmarks are cleared, unless it is asked for.
   const keepFh2 = skipped.has('fh2') && isComplete(doc.features, 'fh1') && !ids.includes('fh2')
@@ -386,6 +500,14 @@ function onTap(screen: Pt) {
     return
   }
   if (!inside) return
+  if (tool === 'pso') {
+    if ((doc.pso?.length ?? 0) >= 3) return
+    pushUndo()
+    ;(doc.pso ??= []).push(p)
+    if (doc.pso.length === 3) psoClose = 0
+    refresh()
+    return
+  }
   if (tool === 'guided') {
     const cur = currentStep()
     if (!cur) return
@@ -539,7 +661,7 @@ function clearGroup(group: 'basic' | Plane) {
     doc.measures = []
     selected = null
     activeId = null
-    if (tool && tool !== 'guided') tool = null
+    if (tool && tool !== 'guided' && tool !== 'pso') tool = null
   } else {
     for (const f of FEATURES) if (f.plane === group) delete doc.features[f.id]
     selectedFeature = null
@@ -550,10 +672,12 @@ function clearGroup(group: 'basic' | Plane) {
 }
 
 function clearAll() {
-  if (!doc.measures.length && !Object.keys(doc.features).length) return
+  if (!doc.measures.length && !Object.keys(doc.features).length && !doc.pso) return
   pushUndo()
   doc.measures = []
   doc.features = {}
+  delete doc.pso
+  psoClose = 0
   skipped.clear()
   tool = null
   activeId = null
@@ -582,8 +706,14 @@ function hitHandle(screen: Pt, radius: number): Handle | null {
       best = h
     }
   }
+  // With the wedge closed, points are drawn away from where they are kept: nothing is dragged until it is opened.
+  if (psoClose > 0 && isWedge(wedge())) return null
+  // While the wedge's three points go down, every tap places one (two back points can be a few pixels apart).
+  if (tool === 'pso' && (doc.pso?.length ?? 0) < 3) return null
   for (const m of doc.measures) m.pts.forEach((_, i) => consider({ pts: m.pts, i, measureId: m.id }))
   for (const f of FEATURES) doc.features[f.id]?.forEach((_, i) => consider({ pts: doc.features[f.id]!, i, feature: f.id }))
+  // The wedge's points can be dragged while the PSO tool is out.
+  if (tool === 'pso' && doc.pso) doc.pso.forEach((_, i) => consider({ pts: doc.pso!, i }))
   return best
 }
 
@@ -736,7 +866,8 @@ cvOverlay.addEventListener('wheel', (e) => {
 // Stop Safari's page-level pinch and rubber-band scrolling; the sheet still scrolls.
 document.addEventListener('gesturestart', (e) => e.preventDefault())
 document.addEventListener('touchmove', (e) => {
-  if (!(e.target as Element).closest?.('#sheet')) e.preventDefault()
+  // The PSO's closing slider sits in the hint bar on the photo, and needs its drag.
+  if (!(e.target as Element).closest?.('#sheet, #hint input[type="range"]')) e.preventDefault()
 }, { passive: false })
 
 // ---------------------------------------------------------------- UI
@@ -765,6 +896,11 @@ function measureName(m: Measure): string {
 function updateHint() {
   const hint = $('hint')
   const actions = $('hint-actions')
+  if (psoSliding && tool === 'pso') {
+    const w = wedge()
+    if (isWedge(w)) $('hint-text').textContent = psoText(w)
+    return
+  }
   actions.replaceChildren()
   let text = ''
   if (src && tool === 'guided') {
@@ -775,7 +911,21 @@ function updateHint() {
       text = `${guidedTitle} ${steps.indexOf(cur) + 1}/${steps.length} · ${def.name}: ${def.prompts[Math.min(n, def.prompts.length - 1)]}`
       actions.append(button('Skip', skipStep), button('Done', finishGuided))
     }
-  } else if (src && tool && tool !== 'guided') {
+  } else if (src && tool === 'pso') {
+    const n = doc.pso?.length ?? 0
+    const w = wedge()
+    if (n < 3) {
+      text = `PSO ${n + 1}/3: ${PSO_PROMPTS[n]}`
+      actions.append(button('Cancel', armPso))
+    } else if (!isWedge(w)) {
+      text = w === 'thin' ? 'PSO: the two cuts lie on one line. Drag a back point.' : 'PSO: the wedge should open towards the back. Put the hinge at the front, both back points behind it.'
+      actions.append(button('Remove', removePso, 'danger'), button('Done', finishPso))
+    } else {
+      text = psoText(w)
+      psoSlider.value = String(Math.round(psoClose * 100))
+      actions.append(psoSlider, button('Done', finishPso))
+    }
+  } else if (src && tool && tool !== 'guided' && tool !== 'pso') {
     const n = doc.measures.find((m) => m.id === activeId)?.pts.length ?? 0
     text = `${TOOL_NAME[tool]} ${n + 1}/${NEED[tool]}: ${FREE_PROMPTS[tool][n]}`
     const kind = tool
@@ -831,6 +981,8 @@ function renderResults() {
     }
   }
   const sag = sagittal()
+  const w = wedge()
+  if (plane === 'sagittal' && isWedge(w)) renderPso(body, w, sag)
   const shown = sag.results.filter((r) => r.plane === plane)
   const hasLandmarks = FEATURES.some((f) => f.plane === plane && doc.features[f.id])
   body.append(sectionHead(plane === 'sagittal' ? 'Sagittal parameters' : 'Coronal parameters', hasLandmarks ? () => clearGroup(plane) : null))
@@ -854,6 +1006,45 @@ function renderResults() {
   $('btn-facing').hidden = plane !== 'sagittal'
   $('age-wrap').hidden = plane !== 'sagittal'
   $('btn-facing').textContent = `Facing ${sag.facing > 0 ? 'right' : 'left'}${facingOverride ? '' : ' (auto)'}`
+}
+
+/** The measures a PSO is planned by: always listed when they can be measured. */
+const PSO_KEYS = ['LL', 'L4S1', 'PI-LL', 'L1PA', 'T4PA', 'TPA']
+/** The pelvis's own measures, which the plan holds still. */
+const PELVIS_KEYS = ['PI', 'PT', 'SS']
+
+/** What the wedge does: each sagittal measure before and after it is closed (those it leaves alone are skipped). */
+function psoChanges(w: Wedge, before = sagittal()): { before: Result; after: Result }[] {
+  const after = compute(moveFeatures(doc.features, w, 1), { tilt: doc.tilt, facing: facingOverride || before.facing, age })
+  const out: { before: Result; after: Result }[] = []
+  for (const b of before.results) {
+    if (b.plane !== 'sagittal' || PELVIS_KEYS.includes(b.key)) continue
+    const a = after.results.find((r) => r.key === b.key)
+    if (!a || (!PSO_KEYS.includes(b.key) && Math.abs(a.value - b.value) < 0.05)) continue
+    out.push({ before: b, after: a })
+  }
+  return out
+}
+
+/** Results' PSO section: the wedge, and each measure it changes before and after the wedge is closed. */
+function renderPso(body: HTMLElement, w: Wedge, before: ReturnType<typeof compute>) {
+  body.append(sectionHead('PSO plan', removePso))
+  const row = el('div', 'res pso')
+  row.append(el('div', 'name', 'Wedge'), el('div', 'val', `${w.deg.toFixed(1)}°`), el('span', ''))
+  body.append(row)
+  const changes = psoChanges(w, before)
+  const any = changes.length > 0
+  for (const { before: b, after: a } of changes) {
+    const r = el('div', 'res pso')
+    const name = el('div', 'name', b.label)
+    const d = a.value - b.value
+    name.append(el('small', '', `${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(b.unit === '%' ? 0 : 1)}${b.unit}`))
+    r.append(name, el('div', 'val', `${formatValue(b)} → ${formatValue(a)}`), el('span', ''))
+    body.append(r)
+  }
+  body.append(el('div', 'empty-note', any
+    ? 'Everything above the wedge turns about the hinge; the pelvis stays where it is. Values on the image follow the slider.'
+    : 'Place S1 and L1 (Guided) to see what the wedge does to lordosis; the femoral heads too for PI − LL and the pelvic angles.'))
 }
 
 /** The state of a guided measurement with the current landmarks (shared by the list, the panel and Results). */
@@ -1092,7 +1283,7 @@ function syncAdjustInputs() {
 // ---------------------------------------------------------------- photo
 
 async function openPhoto(file: Blob) {
-  const hasWork = doc.measures.length > 0 || Object.keys(doc.features).length > 0
+  const hasWork = doc.measures.length > 0 || Object.keys(doc.features).length > 0 || !!doc.pso
   if (src && hasWork && !confirm('Replace the current photo and its measurements?')) return
   try {
     src = await loadPhoto(file)
@@ -1104,6 +1295,7 @@ async function openPhoto(file: Blob) {
   undoStack = []
   tone = { brightness: 1, contrast: 1, invert: false }
   tool = null
+  psoClose = 0
   activeId = null
   selected = null
   selectedFeature = null
@@ -1139,6 +1331,7 @@ function transformPhoto(next: HTMLCanvasElement, map: (p: Pt) => Pt) {
   src = next
   for (const m of doc.measures) m.pts = m.pts.map(map)
   for (const f of FEATURES) if (doc.features[f.id]) doc.features[f.id] = doc.features[f.id]!.map(map)
+  if (doc.pso) doc.pso = doc.pso.map(map)
   // Earlier snapshots refer to the old orientation.
   undoStack = []
   fit()
@@ -1491,7 +1684,8 @@ $('btn-results').addEventListener('click', () => toggleSheet('results'))
 
 document.querySelectorAll<HTMLElement>('#tools [data-tool]').forEach((b) => {
   b.addEventListener('click', () => {
-    const t = b.dataset.tool as ToolKind | 'guided'
+    const t = b.dataset.tool as ToolKind | 'guided' | 'pso'
+    if (t === 'pso') return armPso()
     if (t !== 'guided') return armTool(t)
     if (tool === 'guided') {
       finishGuided()
@@ -1574,7 +1768,16 @@ $('in-age').addEventListener('input', (e) => {
   refresh()
 })
 $('btn-copy').addEventListener('click', async () => {
-  const results = resultsClipboard(doc, sagittal(), measureName)
+  const w = wedge()
+  const plan = isWedge(w)
+    ? [
+        { name: 'PSO wedge (planned)', short: 'PSO wedge', value: `${w.deg.toFixed(1)}°`, note: 'the pelvis held still' },
+        ...psoChanges(w).map(({ before: b, after: a }) => ({
+          name: `${a.label} after PSO (${a.key})`, short: `${a.key} after PSO`, value: formatValue(a), note: `before ${formatValue(b)}`,
+        })),
+      ]
+    : []
+  const results = resultsClipboard(doc, sagittal(), measureName, plan)
   if (!results) return toast('Nothing to copy yet')
   try {
     await copyResults(results)
@@ -1627,7 +1830,19 @@ $('btn-labels').addEventListener('click', async () => {
 $('btn-share').addEventListener('click', async () => {
   if (!src) return
   try {
-    const outcome = await exportView({ src, doc, tone, M: viewMat(), W, H, sagittal: sagittal(), focus })
+    const w = wedge()
+    const cw = closedWedge()
+    const photo = src
+    const outcome = await exportView({
+      src, doc: shownDoc(), tone, M: viewMat(), W, H, sagittal: shownSagittal(), focus,
+      paint: cw ? (c) => drawCut(c, photo, cw, psoClose, 0.25) : undefined,
+      decorate: doc.pso?.length ? (c, M, k) => drawWedge(c, M, doc.pso!, w, psoClose, k, false) : undefined,
+      note: isWedge(w)
+        ? psoClose >= 1 ? `PSO ${Math.round(w.deg)}° planned, closed: values after it`
+          : psoClose > 0 ? `PSO ${Math.round(w.deg)}° planned, ${Math.round(psoClose * 100)}% closed: values part way`
+            : `PSO ${Math.round(w.deg)}° planned, open: values before it`
+        : undefined,
+    })
     if (outcome === 'downloaded') toast('Image saved')
   } catch {
     toast('Could not export the image')
@@ -1641,6 +1856,7 @@ document.addEventListener('keydown', (e) => {
     undo()
   } else if (e.key === 'Escape' && tool) {
     if (tool === 'guided') finishGuided()
+    else if (tool === 'pso') finishPso()
     else armTool(tool)
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected !== null) {
     deleteMeasure(selected)

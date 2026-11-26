@@ -73,5 +73,6 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [ ] Perspective straighten
 - [ ] Length calibration (SVA)
 - [ ] Saved cases, pre/post comparison
-- [ ] Osteotomy and cage simulation
+- [x] PSO planning: three taps for the wedge, a slider to close it, before and after in Results (0.6.0)
+- [ ] Other osteotomies (Smith-Petersen, opening wedge) and cage simulation
 - [ ] Full Roussouly typing (needs lordosis apex, not just SS)

@@ -191,8 +191,12 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 #wait-bar .fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
 .wait-actions { display: flex; gap: 6px; margin-left: auto; }
 .wait-actions button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
-#hint-actions { display: flex; gap: 6px; flex-shrink: 0; }
+#hint-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 #hint-actions button { min-height: 44px; }
+/* The PSO's closing slider: wide enough to drag with a thumb, in the wedge's colour. */
+#hint-actions input[type='range'] { width: min(44vw, 260px); min-height: 44px; margin: 0 4px; accent-color: #ff6b6b; touch-action: none; }
+/* Before and after in Results' PSO section. */
+#results-body .res.pso .val { white-space: nowrap; }
 
 #toast {
   position: absolute;

@@ -6,6 +6,7 @@
 import { Pt, mid, dist } from './geometry'
 import { Doc, Mat, apply, isDone, measureText } from './model'
 import { FEATURES, FeatureId, SagittalResults, formatValue, isComplete } from './sagittal'
+import { Wedge, WedgeProblem, isWedge, pieces } from './osteotomy'
 
 export interface DrawOpts {
   /** Unit scale for line widths and text (1 on screen, larger for export). */
@@ -326,6 +327,155 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, M: Mat, doc: Doc, o: 
       }
     }
     s.forEach((p) => ring(p, color, sel ? 8 : 7))
+  }
+  ctx.restore()
+}
+
+// ---- Osteotomy (PSO) ----
+
+const C_CUT = '#ff6b6b'
+
+/**
+ * Draw the photo cut into two pieces with the wedge closed by the fraction t: the still piece where it is, the piece
+ * above the wedge turned about the hinge. The context's transform maps photo pixels to the output. `ghost` (0 to 1)
+ * also draws the moving piece faintly where it was, so the change can be seen.
+ */
+export function drawCut(ctx: CanvasRenderingContext2D, src: CanvasImageSource & { width: number; height: number }, w: Wedge, t: number, ghost = 0): void {
+  const R = 4 * Math.max(src.width, src.height)
+  const { moving, still } = pieces(w, R)
+  const clipTo = (P: Pt[]) => {
+    ctx.beginPath()
+    ctx.moveTo(P[0].x, P[0].y)
+    for (let i = 1; i < P.length; i++) ctx.lineTo(P[i].x, P[i].y)
+    ctx.closePath()
+    ctx.clip()
+  }
+  ctx.save()
+  clipTo(still)
+  ctx.drawImage(src, 0, 0)
+  ctx.restore()
+  if (ghost > 0) {
+    ctx.save()
+    ctx.globalAlpha = ghost
+    clipTo(moving)
+    ctx.drawImage(src, 0, 0)
+    ctx.restore()
+  }
+  ctx.save()
+  ctx.translate(w.h.x, w.h.y)
+  ctx.rotate(t * w.theta)
+  ctx.translate(-w.h.x, -w.h.y)
+  clipTo(moving)
+  ctx.drawImage(src, 0, 0)
+  ctx.restore()
+}
+
+/**
+ * The wedge's marks on the overlay: the points tapped so far (rings, drawn while they can be dragged), the triangle of
+ * bone taken out with both cuts carried on past the back points, and the angle at the hinge. `w` is the wedge once
+ * all three points are there (or why they make none); `t` how far it is closed.
+ */
+export function drawWedge(ctx: CanvasRenderingContext2D, M: Mat, pts: Pt[], w: Wedge | WedgeProblem | null, t: number, k: number, rings: boolean): void {
+  const S = (p: Pt) => apply(M, p)
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  const stroke = (color: string, width: number, dash: number[] = []) => {
+    ctx.setLineDash(dash.map((d) => d * k))
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'
+    ctx.lineWidth = (width + 2) * k
+    if (!dash.length) ctx.stroke()
+    ctx.strokeStyle = color
+    ctx.lineWidth = width * k
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+  const s = pts.map(S)
+  if (isWedge(w)) {
+    const h = S(w.h)
+    const pL = S(w.pL)
+    // The upper back point as it turns with its piece.
+    const c = Math.cos(t * w.theta)
+    const sn = Math.sin(t * w.theta)
+    const d = { x: w.pU.x - w.h.x, y: w.pU.y - w.h.y }
+    const pU = S({ x: w.h.x + d.x * c - d.y * sn, y: w.h.y + d.x * sn + d.y * c })
+    const far = (p: Pt) => {
+      const v = { x: p.x - h.x, y: p.y - h.y }
+      const n = Math.hypot(v.x, v.y) || 1
+      return { x: p.x + (v.x / n) * 4000 * k, y: p.y + (v.y / n) * 4000 * k }
+    }
+    if (t < 1) {
+      // Beyond the back points, inside the wedge: taken too.
+      const fu = far(pU)
+      const fl = far(pL)
+      ctx.beginPath()
+      ctx.moveTo(pU.x, pU.y)
+      ctx.lineTo(fu.x, fu.y)
+      ctx.lineTo(fl.x, fl.y)
+      ctx.lineTo(pL.x, pL.y)
+      ctx.closePath()
+      ctx.fillStyle = t === 0 ? 'rgba(255,107,107,0.12)' : 'rgba(255,107,107,0.06)'
+      ctx.fill()
+      ctx.beginPath()
+      ctx.moveTo(h.x, h.y)
+      ctx.lineTo(pU.x, pU.y)
+      ctx.lineTo(pL.x, pL.y)
+      ctx.closePath()
+      ctx.fillStyle = t === 0 ? 'rgba(255,107,107,0.38)' : 'rgba(255,107,107,0.2)'
+      ctx.fill()
+      stroke(C_CUT, 2)
+      ctx.beginPath()
+      ctx.moveTo(pU.x, pU.y)
+      ctx.lineTo(fu.x, fu.y)
+      ctx.moveTo(pL.x, pL.y)
+      ctx.lineTo(fl.x, fl.y)
+      stroke(C_CUT, 1.4, [6, 5])
+    } else {
+      // Closed: the line where the two cuts now meet.
+      ctx.beginPath()
+      ctx.moveTo(h.x, h.y)
+      ctx.lineTo(pL.x + (pL.x - h.x) * 0.6, pL.y + (pL.y - h.y) * 0.6)
+      stroke(C_CUT, 1.4, [3, 4])
+    }
+    // The angle, in front of the hinge.
+    const b = { x: (S(w.pU).x + pL.x) / 2 - h.x, y: (S(w.pU).y + pL.y) / 2 - h.y }
+    const bn = Math.hypot(b.x, b.y) || 1
+    const q = { x: h.x - (b.x / bn) * 30 * k, y: h.y - (b.y / bn) * 30 * k }
+    const text = t === 0 ? `${Math.round(w.deg)}°` : t >= 1 ? `${Math.round(w.deg)}° closed` : `${Math.round(w.deg * (1 - t))}° open`
+    ctx.font = `700 ${14 * k}px -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.lineWidth = 4 * k
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+    ctx.strokeText(text, q.x, q.y)
+    ctx.fillStyle = C_CUT
+    ctx.fillText(text, q.x, q.y)
+  } else if (s.length >= 2) {
+    // Placing: the first cut so far.
+    ctx.beginPath()
+    ctx.moveTo(s[0].x, s[0].y)
+    for (const p of s.slice(1)) {
+      ctx.moveTo(s[0].x, s[0].y)
+      ctx.lineTo(p.x, p.y)
+    }
+    stroke(C_CUT, 2)
+  }
+  if (rings || !isWedge(w)) {
+    s.forEach((p, i) => {
+      if (t > 0 && i > 0 && isWedge(w)) return
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, (i === 0 ? 8 : 7) * k, 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'
+      ctx.lineWidth = 4 * k
+      ctx.stroke()
+      ctx.strokeStyle = i === 0 ? '#ffd54a' : C_CUT
+      ctx.lineWidth = 2 * k
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 1.3 * k, 0, Math.PI * 2)
+      ctx.fillStyle = '#fff'
+      ctx.fill()
+    })
   }
   ctx.restore()
 }

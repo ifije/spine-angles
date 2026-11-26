@@ -20,13 +20,19 @@ export interface ExportInput {
   sagittal: SagittalResults
   /** Result isolated on screen, if any; the exported image matches. */
   focus?: string | null
+  /** Draws the photo in place of a plain drawImage (a planned osteotomy, closed); the context maps photo pixels. */
+  paint?: (ctx: CanvasRenderingContext2D) => void
+  /** Draws on top of the overlay, with the same matrix and scale (the osteotomy's wedge). */
+  decorate?: (ctx: CanvasRenderingContext2D, M: Mat, k: number) => void
+  /** A line for the footer, before the caption (what the values show). */
+  note?: string
 }
 
 const CAPTION = 'Measured on a photograph. Approximate; not for diagnostic use.'
 
 /** Render exactly what is on screen (so anything panned out of view is left out), plus a results footer. */
 export function renderExport(input: ExportInput): HTMLCanvasElement {
-  const { src, doc, tone, M, W, H, sagittal, focus } = input
+  const { src, doc, tone, M, W, H, sagittal, focus, paint, decorate, note } = input
   const k = Math.max(2, Math.min(3, 2000 / Math.max(W, H)))
   const w = Math.round(W * k)
   const h = Math.round(H * k)
@@ -51,7 +57,8 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
   }
   const lineH = 24 * k
   const nRows = sagittal.results.length ? rows.length : 0
-  const footerH = pad + nRows * lineH + 18 * k + pad * 0.5
+  const noteH = note ? 20 * k : 0
+  const footerH = pad + nRows * lineH + noteH + 18 * k + pad * 0.5
 
   const c = document.createElement('canvas')
   c.width = w
@@ -68,7 +75,8 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
   const lctx = layer.getContext('2d')!
   lctx.setTransform(Mk[0], Mk[1], Mk[2], Mk[3], Mk[4], Mk[5])
   lctx.imageSmoothingQuality = 'high'
-  lctx.drawImage(src, 0, 0)
+  if (paint) paint(lctx)
+  else lctx.drawImage(src, 0, 0)
   lctx.setTransform(1, 0, 0, 1, 0, 0)
   bakeTone(lctx, w, h, tone)
   ctx.drawImage(layer, 0, 0)
@@ -78,6 +86,7 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
   ctx.rect(0, 0, w, h)
   ctx.clip()
   drawOverlay(ctx, Mk, doc, { k, selected: null, sag: sagittal, focus })
+  decorate?.(ctx, Mk, k)
   ctx.restore()
 
   ctx.fillStyle = '#0b0d10'
@@ -96,6 +105,14 @@ export function renderExport(input: ExportInput): HTMLCanvasElement {
       }
       y += lineH
     }
+  }
+  if (note) {
+    let size = 13
+    ctx.font = font(size, 600)
+    while (size > 8 && ctx.measureText(note).width > w - 2 * pad) ctx.font = font(--size, 600)
+    ctx.fillStyle = '#ff6b6b'
+    ctx.fillText(note, pad, y - lineH / 2 + 9 * k)
+    y += noteH
   }
   ctx.font = font(11, 400)
   ctx.fillStyle = '#98a2ae'
@@ -168,7 +185,11 @@ const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  * The plain text must not begin with "WORD:" - iOS reads that as a URL scheme and Mail then
  * pastes the whole thing percent-encoded. Hence the header line and no colons after names.
  */
-export function resultsClipboard(doc: Doc, sagittal: SagittalResults, nameOf: (m: Measure) => string): ClipboardResults | null {
+/** `extra`: rows added at the end (a planned osteotomy and the values after it). */
+export function resultsClipboard(
+  doc: Doc, sagittal: SagittalResults, nameOf: (m: Measure) => string,
+  extra: { name: string; short: string; value: string; note: string }[] = [],
+): ClipboardResults | null {
   const rows: { name: string; short: string; value: string; note: string }[] = []
   for (const m of doc.measures.filter(isDone)) {
     rows.push({ name: nameOf(m), short: nameOf(m), value: measureText(m, doc.tilt) ?? '', note: '' })
@@ -179,6 +200,7 @@ export function resultsClipboard(doc: Doc, sagittal: SagittalResults, nameOf: (m
     const side = r.plane === 'coronal' && r.note ? ` (${r.note})` : ''
     rows.push({ name, short: r.key, value: formatValue(r) + side, note: r.plane === 'coronal' ? '' : r.note ?? '' })
   }
+  rows.push(...extra)
   if (!rows.length) return null
   const plain = [HEADER, ...rows.map((r) => `${r.short}  ${r.value}`)].join('\n')
   const cell = (tag: string, text: string, align = 'left') =>

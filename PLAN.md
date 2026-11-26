@@ -69,7 +69,7 @@ A first guess of the sagittal landmarks, for the user to drag, keep or delete; n
 - Four-corner perspective straighten
 - Calibration against a known length to unlock SVA and other distances
 - Save cases on-device and compare pre-op to post-op
-- Osteotomy and cage simulation (the planning side of SpineForgePlanner)
+- Osteotomy and cage simulation (the planning side of SpineForgePlanner). PSO planning is done (0.6.0): one wedge, closed about its hinge, the pelvis held still
 
 ## Technical design
 

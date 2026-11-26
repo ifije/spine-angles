@@ -27,6 +27,8 @@ export interface Doc {
    * the detector's confidence (0 to 1). Kept in the document so that undo restores it.
    */
   auto?: Partial<Record<FeatureId, number>>
+  /** A planned osteotomy (PSO): the hinge, then the two back points (fewer while it is being placed). */
+  pso?: Pt[]
 }
 
 export const isDone = (m: Measure): boolean => m.pts.length >= NEED[m.kind]
