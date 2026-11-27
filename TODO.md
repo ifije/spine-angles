@@ -15,7 +15,7 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] Level (fine rotation) for tilted photos
 - [x] Geometry module with unit tests
 - [x] Loupe and draggable points
-- [x] Tools: Cobb, three-point angle, slope to horizontal/vertical
+- [x] Tools: Cobb, three-point angle, slope to horizontal/vertical (under one Tools button since 0.8.1)
 - [x] Undo, delete, clear
 - [x] Export annotated image; copy results
 

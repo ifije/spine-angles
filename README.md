@@ -26,7 +26,9 @@ Everything happens on your device. Photos are not uploaded, and no photo is kept
 
 ## Measuring
 
-### Basic tools (bottom bar)
+### Basic tools (Tools, in the bottom bar)
+
+Tap **Tools** and choose one. Tap the one that is out again to put it away; tap anywhere else to close the chooser.
 
 | Tool | Taps | Gives |
 |---|---|---|

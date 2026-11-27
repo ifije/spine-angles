@@ -32,6 +32,8 @@ const octx = cvOverlay.getContext('2d')!
 const loupeEl = $('loupe')
 const cvLoupeImage = $<HTMLCanvasElement>('loupe-image')
 const cvLoupeOverlay = $<HTMLCanvasElement>('loupe-overlay')
+/** The Tools chooser above the bottom bar: Cobb, Angle and Slope. */
+const toolMenu = $('tool-menu')
 const LOUPE = 132
 const LOUPE_ZOOM = 2.5
 
@@ -1203,6 +1205,8 @@ function endDrag() {
 cvOverlay.addEventListener('pointerdown', (e) => {
   if (!src) return
   e.preventDefault()
+  // A touch on the photo with the Tools chooser open only closes the chooser.
+  if (!toolMenu.hidden) return showToolMenu(false)
   try {
     cvOverlay.setPointerCapture(e.pointerId)
   } catch {
@@ -1771,6 +1775,7 @@ function refresh() {
     b.classList.toggle('on', t === tool || (t === 'guided' && sheet === 'guided'))
   })
   $('btn-results').classList.toggle('on', sheet === 'results')
+  $('btn-tools').classList.toggle('on', !toolMenu.hidden || tool === 'cobb' || tool === 'angle3' || tool === 'slope')
   document.querySelectorAll<HTMLElement>('#plane-tabs [data-plane]').forEach((b) => b.classList.toggle('on', b.dataset.plane === plane))
   $('empty').hidden = has
   if (sheet === 'results') renderResults()
@@ -2225,6 +2230,48 @@ document.querySelectorAll<HTMLElement>('#tools [data-tool]').forEach((b) => {
       toggleSheet('guided')
     }
   })
+})
+
+// ---------------------------------------------------------------- the Tools chooser
+
+/** Open or close the Tools chooser, over the Tools button and inside the screen. */
+function showToolMenu(open: boolean) {
+  if (open === !toolMenu.hidden) return
+  toolMenu.hidden = !open
+  const b = $('btn-tools')
+  b.setAttribute('aria-expanded', String(open))
+  if (open) {
+    const room = (toolMenu.offsetParent as HTMLElement | null)?.clientWidth ?? window.innerWidth
+    const left = b.offsetLeft + b.offsetWidth / 2 - toolMenu.offsetWidth / 2
+    toolMenu.style.left = `${Math.max(6, Math.min(left, room - toolMenu.offsetWidth - 6))}px`
+  }
+  refresh()
+}
+
+$('btn-tools').addEventListener('click', () => {
+  if (!src) return toast('Choose a photo first')
+  showToolMenu(toolMenu.hidden === true)
+})
+// A tool chosen (its own listener puts it out, or away if it was out), then the chooser closes.
+toolMenu.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).closest('[data-tool]')) showToolMenu(false)
+})
+// A touch anywhere else closes the chooser and does what it would have done; on the photo it does nothing more.
+document.addEventListener(
+  'pointerdown',
+  (e) => {
+    const t = e.target as Node
+    if (!toolMenu.hidden && t !== cvOverlay && !toolMenu.contains(t) && !$('btn-tools').contains(t)) showToolMenu(false)
+  },
+  true,
+)
+// It is placed when it opens, so a turned screen closes it.
+window.addEventListener('resize', () => showToolMenu(false))
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !toolMenu.hidden) {
+    e.stopImmediatePropagation()
+    showToolMenu(false)
+  }
 })
 
 document.querySelectorAll<HTMLElement>('#plane-tabs [data-plane]').forEach((b) => {

@@ -294,6 +294,20 @@ button.big { min-height: 52px; padding: 0 22px; font-size: 17px; border-radius: 
 #tools button.on { color: var(--accent); background: var(--panel-2); border-color: var(--line); }
 #tools svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #tools svg circle { fill: currentColor; stroke: none; }
+/* The Tools chooser: Cobb, Angle and Slope in a small panel just above the bar, over the Tools button (placed by script). */
+#tool-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 6px;
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+#tools #tool-menu button { flex: 0 0 76px; min-height: 56px; }
 
 @media (min-width: 720px) {
   #sheet { max-height: 40%; padding-left: max(14px, calc(50% - 340px)); padding-right: max(14px, calc(50% - 340px)); }
