@@ -17,6 +17,7 @@ See [PLAN.md](PLAN.md) for the full plan. Live at https://ifije.github.io/spine-
 - [x] Loupe and draggable points
 - [x] Tools: Cobb, three-point angle, slope to horizontal/vertical (under one Tools button since 0.8.1)
 - [x] Undo, delete, clear
+- [x] Cobb, Angle and Slope hide the other lines while one is out, as the PSO does (0.8.2)
 - [x] Export annotated image; copy results
 
 ## Phase 2 — Guided sagittal workflow

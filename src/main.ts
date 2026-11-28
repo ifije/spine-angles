@@ -58,6 +58,8 @@ let cageSel: number | null = null
 let cageNew = false
 /** The PSO and Cage tools plan on the photo; while one is out the landmarks are hidden. */
 const planTool = (t: Tool) => t === 'pso' || t === 'cage'
+/** Cobb, Angle and Slope measure on the photo; while one is out only the measurement being placed is drawn. */
+const measureTool = (t: Tool) => t === 'cobb' || t === 'angle3' || t === 'slope'
 /** Free measurement currently being placed. */
 let activeId: number | null = null
 let selected: number | null = null
@@ -246,6 +248,10 @@ function shownDoc(): Doc {
     measures: doc.measures.map((m) => ({ ...m, pts: moveLinesThrough(m.pts, cuts, m.kind !== 'angle3') })),
   }
 }
+/** While a measuring tool is out: the measurement being placed and nothing else (no landmarks, no other lines). */
+function placingOnly(): Doc {
+  return { ...doc, features: {}, measures: doc.measures.filter((m) => m.id === activeId) }
+}
 /** The guided results with these cuts made. Facing is the photo's own. */
 const sagittalWith = (cuts: Cut[]) =>
   compute(moveFeaturesThrough(doc.features, cuts), { tilt: doc.tilt, facing: facingOverride || sagittal().facing, age })
@@ -307,9 +313,11 @@ function draw() {
   const cuts = shownCuts()
   if (cuts.length) drawPieces(ictx, src, cuts, 0.25)
   else ictx.drawImage(src, 0, 0)
-  // While a planning tool is out, only the photo and the plan: the landmarks come back, moved, with Done.
-  if (!planTool(tool)) drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
-  drawPlanMarks(octx, M, 1, true)
+  // While a planning tool is out, only the photo and the plan: the landmarks come back, moved, with Done. While a
+  // measuring tool is out, only the photo and the measurement being placed.
+  if (measureTool(tool)) drawOverlay(octx, M, placingOnly(), { k: 1 })
+  else if (!planTool(tool)) drawOverlay(octx, M, shownDoc(), { k: 1, selected, selectedFeature, sag: shownSagittal(), focus })
+  if (!measureTool(tool)) drawPlanMarks(octx, M, 1, true)
   if (loupeAt) drawLoupe()
 }
 
@@ -331,8 +339,9 @@ function drawLoupe() {
   const lo = cvLoupeOverlay.getContext('2d')!
   lo.setTransform(dpr, 0, 0, dpr, 0, 0)
   lo.clearRect(0, 0, LOUPE, LOUPE)
-  if (!planTool(tool)) drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
-  drawPlanMarks(lo, M, 1, true)
+  if (measureTool(tool)) drawOverlay(lo, M, placingOnly(), { k: 1, noLabels: true })
+  else if (!planTool(tool)) drawOverlay(lo, M, doc, { k: 1, selected, noLabels: true, sag: sagittal(), focus })
+  if (!measureTool(tool)) drawPlanMarks(lo, M, 1, true)
   // Crosshair ticks, leaving the centre clear.
   for (const [color, width] of [['rgba(0,0,0,0.7)', 3], ['#fff', 1]] as const) {
     lo.strokeStyle = color
@@ -531,6 +540,7 @@ function showPlanAgain(newWedge: boolean) {
 function armTool(kind: ToolKind) {
   if (!src) return toast('Choose a photo first')
   const wasOn = tool === kind
+  const planShown = shownCuts().length > 0
   if (!wasOn) openPlan()
   dropPartials()
   tool = wasOn ? null : kind
@@ -538,6 +548,10 @@ function armTool(kind: ToolKind) {
   selected = null
   openSheet(null)
   refresh()
+  // The other lines are hidden while a measurement is placed; say so when there are any.
+  const lines = doc.measures.length || Object.keys(doc.features).length || doc.pso?.length || hasPlan()
+  if (tool && planShown) toast('Plan opened, and other lines hidden, while you measure')
+  else if (tool && lines) toast('Other lines hidden while you measure; they come back when you finish')
 }
 
 // ---------------------------------------------------------------- osteotomy (PSO)
@@ -1128,6 +1142,9 @@ function hitHandle(screen: Pt, radius: number): Handle | null {
   const consider = (h: Handle) => {
     const d = dist(apply(M, shownAt(h)), screen)
     if (d <= bestD) {
+      // With a measuring tool out the other lines are hidden: only the measurement being placed can be grabbed (the
+      // plan is opened for it, so everything else reaches the loops at the end).
+      if (measureTool(tool) && (h.measureId === undefined || h.measureId !== activeId)) return
       bestD = d
       best = h
     }

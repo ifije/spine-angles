@@ -36,6 +36,8 @@ Tap **Tools** and choose one. Tap the one that is out again to put it away; tap 
 | **Angle** | Arm, vertex, arm | Angle at the vertex |
 | **Slope** | Two ends of a line | Angle to horizontal or vertical, whichever is nearer |
 
+While one is out, only the measurement being placed is shown: the landmarks, the other lines and a planned PSO or cage come back when it is finished or cancelled.
+
 ### Guided measurements
 
 Tap **Guided** and choose **Sagittal** or **Coronal**. Each measurement is listed with its value once it can be worked out, and with the landmarks it uses as small tags, the same tags that are drawn on the image (FH, S1, L4, L1, T4 …):
